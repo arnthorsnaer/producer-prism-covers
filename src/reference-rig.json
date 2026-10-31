@@ -1,0 +1,118 @@
+{
+  "room": "#9915ff",
+  "roomStrength": 0.13,
+  "exposure": 1,
+  "lamps": [
+    {
+      "id": "nw",
+      "name": "North west",
+      "color": "#ff3e00",
+      "intensity": 9919.86,
+      "pos": [
+        -35.86,
+        26.57,
+        9.37
+      ],
+      "aim": [
+        -4.41,
+        3.75
+      ],
+      "cone": 8,
+      "soft": 0.65
+    },
+    {
+      "id": "ne",
+      "name": "North east",
+      "color": "#ffa121",
+      "intensity": 1173.18,
+      "pos": [
+        -12.74,
+        7.55,
+        22.6
+      ],
+      "aim": [
+        1.63,
+        3.82
+      ],
+      "cone": 13.5,
+      "soft": 1
+    },
+    {
+      "id": "sw",
+      "name": "South west",
+      "color": "#ffc53e",
+      "intensity": 46.56,
+      "pos": [
+        -5.22,
+        -0.54,
+        5.66
+      ],
+      "aim": [
+        -4.56,
+        -2.1
+      ],
+      "cone": 57.8,
+      "soft": 0.3
+    },
+    {
+      "id": "se",
+      "name": "South east",
+      "color": "#00ff69",
+      "intensity": 3502.15,
+      "pos": [
+        21.28,
+        25.65,
+        26.33
+      ],
+      "aim": [
+        1.11,
+        -4.84
+      ],
+      "cone": 8,
+      "soft": 1
+    },
+    {
+      "id": "key",
+      "name": "Overhead key",
+      "color": "#00ff74",
+      "intensity": 1850.31,
+      "pos": [
+        -20.69,
+        -9.69,
+        34.31
+      ],
+      "aim": [
+        1.03,
+        0.5
+      ],
+      "cone": 8,
+      "soft": 1
+    },
+    {
+      "id": "under",
+      "name": "Under-glow",
+      "color": "#f0ff80",
+      "intensity": 22.95,
+      "pos": [
+        -0.5,
+        0.5,
+        -1.31
+      ],
+      "aim": [
+        -0.5,
+        0.5
+      ],
+      "cone": 64.9,
+      "soft": 1
+    }
+  ],
+  "cross": {
+    "color": "#5197ff",
+    "intensity": 1.88,
+    "height": 1.45,
+    "arm": [
+      7.35,
+      7.41
+    ]
+  }
+}
