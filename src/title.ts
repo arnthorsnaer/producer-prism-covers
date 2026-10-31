@@ -102,7 +102,9 @@ export function drawTitle(ctx: CanvasRenderingContext2D, l: TitleLayout, color: 
   // Lift: a wide, faint bed of shadow under the type, then a tight soft one at
   // the letters. Both are sized to the type so the export and the small
   // previews look the same.
-  const cap = l.box.h, shade = shadowFor(color, bg)
+  // Shadow blur and offset ignore the canvas transform, so scale them by it
+  // (the on-screen layer is drawn at devicePixelRatio).
+  const cap = l.box.h * ctx.getTransform().a, shade = shadowFor(color, bg)
   const pass = (alpha: number, blur: number, dy: number) => {
     ctx.shadowColor = `rgba(${shade.rgb}, ${alpha * shade.k})`; ctx.shadowBlur = cap * blur; ctx.shadowOffsetY = cap * dy
     for (const p of l.pens) ctx.fillText(p.ch, p.x, l.baseline)
