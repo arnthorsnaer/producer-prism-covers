@@ -138,12 +138,12 @@ function toGray(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, 
 // canvas. Every tile shares the camera, so the shading is identical. Tone
 // mapping, sRGB and MSAA are as on screen; lamp helpers are hidden. The main
 // view builds land for every format's window, so it can export any of them.
-export type Shoot = (scale: number, f: Format, zoom: number, title: Title, gray: boolean) => Promise<Blob>
+export type Shoot = (scale: number, f: Format, zoom: number, title: Title, gray: boolean, ink: string) => Promise<Blob>
 const TILE_W = 1750, TILE_H = 1250
 function Exporter({ shoot }: { shoot: React.MutableRefObject<Shoot | null> }) {
   const gl = useThree((s) => s.gl), scene = useThree((s) => s.scene), size = useThree((s) => s.size)
   useEffect(() => {
-    shoot.current = async (scale, f, zoom, title, gray) => {
+    shoot.current = async (scale, f, zoom, title, gray, ink) => {
       await fontsReady(title.weight)
       const W = f.out[0] * scale, H = f.out[1] * scale, dpr = gl.getPixelRatio(), win = windowOf(f, zoom)
       const out = Object.assign(document.createElement('canvas'), { width: W, height: H }), ctx = out.getContext('2d')!
@@ -160,9 +160,9 @@ function Exporter({ shoot }: { shoot: React.MutableRefObject<Shoot | null> }) {
       }
       if (helpers) helpers.visible = true
       gl.setPixelRatio(dpr); gl.setSize(size.width, size.height, false)
-      // The title goes on last, its ink judged from the finished pixels under it.
+      // The title goes on last, in the ink every format shares; its shadow is tinted from the pixels under it.
       const l = layoutTitle(ctx, title, win, W, H)
-      if (l) { const px = sampleBox(out, l.box, 1, 1); drawTitle(ctx, l, inkColor(title, pickInk(px)), meanColor(px)) }
+      if (l) { const px = sampleBox(out, l.box, 1, 1), c = meanColor(px); drawTitle(ctx, l, ink, gray ? c.map(() => grayOf(...c)) as RGB8 : c) }
       return new Promise<Blob>((resolve, reject) => out.toBlob((b) => (b ? resolve(b) : reject(new Error('PNG encode failed'))), 'image/png'))
     }
     return () => { shoot.current = null }
@@ -221,9 +221,12 @@ const Scene = memo(function Scene({ rig, shape, format, zoom, iso = false, onSco
 // The title over a view, drawn by the same code as the export. In auto ink it
 // re-reads the pixels under itself a few times a second. On the main view it can
 // be dragged; the drag sets the format-agnostic u, v and every format follows.
-function TitleOverlay({ title, win, gray, onMove }: { title: Title; win: Win; gray: boolean; onMove?: (t: Title) => void }) {
+// Every view's pixels under its title, by format id. The app picks one auto
+// ink from all of them together, so every format (and the export) agrees.
+type Samples = React.MutableRefObject<Map<string, Uint8ClampedArray>>
+function TitleOverlay({ title, win, gray, ink, samples, id, onMove }: { title: Title; win: Win; gray: boolean; ink: string; samples: Samples; id: string; onMove?: (t: Title) => void }) {
   const ref = useRef<HTMLCanvasElement>(null), [size, setSize] = useState({ w: 0, h: 0 })
-  const [auto, setAuto] = useState<string>(INKS.white), [bg, setBg] = useState<RGB8>([0, 0, 0]), [fonts, setFonts] = useState(0)
+  const [bg, setBg] = useState<RGB8>([0, 0, 0]), [fonts, setFonts] = useState(0)
   useEffect(() => { fontsReady(title.weight).then(() => setFonts((n) => n + 1)) }, [title.weight])
   useEffect(() => {
     const ro = new ResizeObserver(([e]) => setSize({ w: e.contentRect.width, h: e.contentRect.height }))
@@ -231,7 +234,7 @@ function TitleOverlay({ title, win, gray, onMove }: { title: Title; win: Win; gr
   }, [])
   const layout = useMemo(() => (size.w ? layoutTitle(ref.current!.getContext('2d')!, title, win, size.w, size.h) : null),
     [title, win.cx, win.cy, win.w, win.h, size, fonts]) // eslint-disable-line react-hooks/exhaustive-deps
-  const color = inkColor(title, auto)
+  const color = ink
   useEffect(() => {
     const c = ref.current!, dpr = devicePixelRatio, ctx = c.getContext('2d')!
     c.width = Math.round(size.w * dpr); c.height = Math.round(size.h * dpr)
@@ -244,11 +247,11 @@ function TitleOverlay({ title, win, gray, onMove }: { title: Title; win: Win; gr
       const gl = ref.current?.parentElement?.querySelector<HTMLCanvasElement>('canvas:not(.title-layer)')
       if (!gl?.width) return
       const px = sampleBox(gl, layout.box, gl.width / size.w, gl.height / size.h), c = meanColor(px), m = gray ? c.map(() => grayOf(...c)) as RGB8 : c
-      setAuto((prev) => pickInk(px, prev))
+      samples.current.set(id, px)
       setBg((prev) => (prev.every((c, i) => Math.abs(c - m[i]) < 2) ? prev : m))
     }
-    read(); const id = setInterval(read, 400); return () => clearInterval(id)
-  }, [layout, title.ink, size, gray])
+    read(); const timer = setInterval(read, 400); return () => clearInterval(timer)
+  }, [layout, size, gray, samples, id])
   const grab = useRef<{ x: number; y: number; u: number; v: number } | null>(null)
   const clamp = (n: number) => Math.min(1, Math.max(0, n))
   return <>
@@ -306,6 +309,19 @@ function App() {
   const format = FORMATS.find((f) => f.id === formatId)!
   const [score, setScore] = useState<number | null>(null), [wipe, setWipe] = useState(50)
   const [title, setTitle] = useState<Title>(TITLE), [gray, setGray] = useState(false)
+  // One auto ink for all formats, judged on everything under every title.
+  const samples = useRef(new Map<string, Uint8ClampedArray>()), [autoInk, setAutoInk] = useState<string>(INKS.white)
+  useEffect(() => {
+    const id = setInterval(() => {
+      const all = [...samples.current.values()]
+      if (!all.length) return
+      const px = new Uint8ClampedArray(all.reduce((n, a) => n + a.length, 0))
+      all.reduce((at, a) => (px.set(a, at), at + a.length), 0)
+      setAutoInk((prev) => pickInk(px, prev))
+    }, 400)
+    return () => clearInterval(id)
+  }, [])
+  const ink = inkColor(title, autoInk)
   const shoot = useRef<Shoot | null>(null), [saving, setSaving] = useState<string | null>(null)
   const download = async (scale: number, formats: readonly Format[]) => {
     if (!shoot.current) return
@@ -313,7 +329,7 @@ function App() {
     try {
       const stamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-')
       for (const f of formats) {
-        const url = URL.createObjectURL(await shoot.current(scale, f, zoom, title, gray))
+        const url = URL.createObjectURL(await shoot.current(scale, f, zoom, title, gray, ink))
         Object.assign(document.createElement('a'), { href: url, download: `prism-${theme}${gray ? '-gray' : ''}-${f.id}-${f.out[0] * scale}x${f.out[1] * scale}-${stamp}.png` }).click()
         setTimeout(() => URL.revokeObjectURL(url), 10000)
       }
@@ -352,7 +368,7 @@ function App() {
     <div className={`main-view compare-${compare}`}>
       <div className={`visual generated ${wiping ? 'wiping' : ''}`} onPointerDown={drag} onPointerMove={drag}>
         <div className={iso ? 'frame' : 'frame window'} style={{ '--ar': format.ar } as React.CSSProperties}><Scene rig={lit} shape={shape} format={format} zoom={zoom} iso={iso} onScore={setScore} shoot={shoot} />
-          {!iso && !wiping && <TitleOverlay title={title} win={windowOf(format, zoom)} gray={gray} onMove={setTitle} />}</div>
+          {!iso && !wiping && <TitleOverlay title={title} win={windowOf(format, zoom)} gray={gray} ink={ink} samples={samples} id={format.id} onMove={setTitle} />}</div>
         {wiping && <><img className="wipe-ref" src={REFERENCE} alt="" style={{ clipPath: `inset(0 0 0 ${wipe}%)` }} /><div className="wipe-handle" style={{ left: `${wipe}%` }} /></>}
         <span className="panel-tag">{wiping ? 'DRAG TO WIPE · ' : ''}{format.name.toUpperCase()} · {zoom.toFixed(2)}×{score != null && comparable && !iso && <b> · ΔE {score.toFixed(1)}</b>}</span>
       </div>
@@ -370,7 +386,7 @@ function App() {
       {FORMATS.filter((f) => f.id !== formatId).map((f) =>
         <button key={f.id} className="thumb" style={{ '--ar': f.ar } as React.CSSProperties} onClick={() => setFormatId(f.id)} title={`Focus ${f.name}`}>
           <Scene rig={lit} shape={shape} format={f} zoom={zoom} />
-          <TitleOverlay title={title} win={windowOf(f, zoom)} gray={gray} />
+          <TitleOverlay title={title} win={windowOf(f, zoom)} gray={gray} ink={ink} samples={samples} id={f.id} />
           <span>{f.name.toUpperCase()}</span>
         </button>)}
     </div>
