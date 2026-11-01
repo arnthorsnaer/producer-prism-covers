@@ -63,6 +63,12 @@ export function cornerZ(i: number, j: number, ci: number, cj: number, p = PRISM)
   return p.dome * (1 - r2) + (onRidge ? p.ridge : 0)
 }
 
+// The lens surface at any point, without the per-cell folds (for drawing on it).
+export function surfaceZ(x: number, y: number, p = PRISM) {
+  const u = Math.abs(x - p.cx) / (VIEW.w / 2) / p.spread, v = Math.abs(y - p.cy) / (VIEW.h / 2) / p.spread
+  return p.dome * (1 - (u ** p.profile + v ** p.profile) / 2) + Math.max(p.ridge, 0)
+}
+
 const corner = (i: number, j: number, ci: number, cj: number, p = PRISM): V3 => [wx(i), wy(j), cornerZ(i, j, ci, cj, p)]
 
 export function topFacets(p = PRISM, g = GRID): Tri[] {

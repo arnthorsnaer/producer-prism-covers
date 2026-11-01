@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { Canvas, useThree } from '@react-three/fiber'
 import { Line, OrbitControls, OrthographicCamera, PerspectiveCamera } from '@react-three/drei'
 import * as THREE from 'three'
-import { GRID, PRISM, SURFACE, VIEW, gridFor, prismTriangles, faceNormal, facetCentre, randomShape, type Shape } from './prism'
+import { GRID, PRISM, SURFACE, VIEW, gridFor, surfaceZ, prismTriangles, faceNormal, facetCentre, randomShape, type Shape } from './prism'
 import { CONE_MAX, CROSS_N, DECAY, NO_CROSS, randomRig, type Cross, type Lamp, type MoodName, type Rig } from './rig'
 import { DEFAULT_LOOK, STARTERS, exportProject, importProject, listProjects, loadSession, newId, slug, storeProjects, storeSession, type Locks, type Look, type Project, type Session } from './projects'
 import { deltaE, lab, type RGB } from './color'
@@ -189,8 +189,51 @@ function Spot({ lamp }: { lamp: Lamp }) {
   </>
 }
 
-type SceneProps = { rig: Rig; shape: Shape; format: Format; zoom: number; iso?: boolean; onScore?: (de: number | null) => void; shoot?: React.MutableRefObject<Shoot | null> }
-const Scene = memo(function Scene({ rig, shape, format, zoom, iso = false, onScore, shoot }: SceneProps) {
+// Isometric only: the focused format's frame drawn on the land, and its title
+// floating over that area, laid out exactly as in the flat view.
+function IsoFrame({ win, shape, title, ink }: { win: Win; shape: Shape; title: Title; ink: string }) {
+  const [fonts, setFonts] = useState(0)
+  useEffect(() => { fontsReady(title.weight).then(() => setFonts((n) => n + 1)) }, [title.weight])
+  const { outline, posts, top, lid } = useMemo(() => {
+    const x0 = win.cx - win.w / 2, x1 = win.cx + win.w / 2, y0 = win.cy - win.h / 2, y1 = win.cy + win.h / 2, N = 48
+    const at = (x: number, y: number): Lamp['pos'] => [x, y, surfaceZ(x, y, shape) + 0.06]
+    const edge = (ax: number, ay: number, bx: number, by: number) => Array.from({ length: N }, (_, k) => at(ax + ((bx - ax) * k) / N, ay + ((by - ay) * k) / N))
+    const outline = [...edge(x0, y0, x1, y0), ...edge(x1, y0, x1, y1), ...edge(x1, y1, x0, y1), ...edge(x0, y1, x0, y0), at(x0, y0)]
+    let top = -Infinity
+    for (let i = 0; i <= 8; i++) for (let j = 0; j <= 8; j++) top = Math.max(top, surfaceZ(x0 + (win.w * i) / 8, y0 + (win.h * j) / 8, shape))
+    top += Math.max(3, win.w * 0.3)
+    const posts = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].map(([x, y]) => [at(x, y), [x, y, top] as Lamp['pos']])
+    const lid: Lamp['pos'][] = [[x0, y0, top], [x1, y0, top], [x1, y1, top], [x0, y1, top], [x0, y0, top]]
+    return { outline, posts, top, lid }
+  }, [win.cx, win.cy, win.w, win.h, shape])
+  const texture = useMemo(() => {
+    const W = 1600, H = Math.round((W * win.h) / win.w)
+    const c = Object.assign(document.createElement('canvas'), { width: W, height: H }), ctx = c.getContext('2d')!
+    // A card of frosted glass behind the type so it reads against the dark
+    // room: light behind dark ink, dark behind light ink.
+    const n = parseInt(ink.slice(1), 16), light = grayOf(n >> 16, (n >> 8) & 255, n & 255) > 128
+    const l = layoutTitle(ctx, title, win, W, H)
+    if (l) {
+      const pad = l.cap * 0.6
+      ctx.fillStyle = light ? 'rgba(0, 0, 0, 0.45)' : 'rgba(255, 255, 255, 0.6)'
+      ctx.fillRect(l.box.x - pad, l.box.y - pad, l.box.w + pad * 2, l.box.h + pad * 2)
+      drawTitle(ctx, l, ink)
+    }
+    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8
+    return t
+  }, [title, ink, win.cx, win.cy, win.w, win.h, fonts]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => texture.dispose(), [texture])
+  return <>
+    <Line points={outline} color="#efff9a" lineWidth={2} />
+    {posts.map((p, k) => <Line key={k} points={p} color="#efff9a" lineWidth={1} dashed dashSize={0.15} gapSize={0.12} transparent opacity={0.5} />)}
+    <Line points={lid} color="#efff9a" lineWidth={1} transparent opacity={0.35} />
+    <mesh position={[win.cx, win.cy, top]}><planeGeometry args={[win.w, win.h]} />
+      <meshBasicMaterial map={texture} transparent toneMapped={false} depthWrite={false} side={THREE.DoubleSide} /></mesh>
+  </>
+}
+
+type SceneProps = { rig: Rig; shape: Shape; format: Format; zoom: number; iso?: boolean; isoTitle?: { title: Title; ink: string }; onScore?: (de: number | null) => void; shoot?: React.MutableRefObject<Shoot | null> }
+const Scene = memo(function Scene({ rig, shape, format, zoom, iso = false, isoTitle, onScore, shoot }: SceneProps) {
   const win = windowOf(format, zoom)
   // Land under this view; the main view (the one that exports) covers every
   // format's window, and the isometric view at least the original slab.
@@ -210,7 +253,8 @@ const Scene = memo(function Scene({ rig, shape, format, zoom, iso = false, onSco
     {rig.lamps.map((l) => <Spot key={l.id} lamp={l} />)}
     <CrossLight cross={rig.cross ?? NO_CROSS} top={[shape.cx, shape.cy]} />
     <Prism shape={shape} grid={grid} />
-    <group name="helpers">{iso && (rig.cross?.intensity ?? 0) > 0 && [0, 1].map((axis) => { const c = rig.cross!, a = c.arm[axis]
+    <group name="helpers">{iso && isoTitle && <IsoFrame win={win} shape={shape} title={isoTitle.title} ink={isoTitle.ink} />}
+    {iso && (rig.cross?.intensity ?? 0) > 0 && [0, 1].map((axis) => { const c = rig.cross!, a = c.arm[axis]
       return <Line key={axis} points={[[shape.cx - (axis ? 0 : a), shape.cy - (axis ? a : 0), c.height], [shape.cx + (axis ? 0 : a), shape.cy + (axis ? a : 0), c.height]]} color={c.color} lineWidth={3} /> })}
     {iso && rig.lamps.map((l) => <group key={l.id}>
       <mesh position={l.pos}><sphereGeometry args={[0.14, 16, 16]} /><meshBasicMaterial color={l.color} toneMapped={false} /></mesh>
@@ -382,6 +426,7 @@ function App() {
     return () => clearInterval(id)
   }, [])
   const ink = inkColor(title, autoInk)
+  const isoTitle = useMemo(() => (iso ? { title, ink } : undefined), [iso, title, ink])
 
   const shoot = useRef<Shoot | null>(null), [saving, setSaving] = useState<string | null>(null)
   const download = async (scale: number, formats: readonly Format[]) => {
@@ -496,7 +541,7 @@ function App() {
     <section className="stage">
     <div className={`main-view compare-${compare}`}>
       <div className={`visual generated ${wiping ? 'wiping' : ''}`} onPointerDown={drag} onPointerMove={drag}>
-        <div className={iso ? 'frame' : 'frame window'} style={{ '--ar': format.ar } as React.CSSProperties}><Scene rig={lit} shape={shape} format={format} zoom={zoom} iso={iso} onScore={setScore} shoot={shoot} />
+        <div className={iso ? 'frame' : 'frame window'} style={{ '--ar': format.ar } as React.CSSProperties}><Scene rig={lit} shape={shape} format={format} zoom={zoom} iso={iso} isoTitle={isoTitle} onScore={setScore} shoot={shoot} />
           {!iso && !wiping && <TitleOverlay title={title} win={windowOf(format, zoom)} gray={gray} ink={ink} samples={samples} id={format.id} onMove={setTitle} />}</div>
         {wiping && <><img className="wipe-ref" src={REFERENCE} alt="" style={{ clipPath: `inset(0 0 0 ${wipe}%)` }} /><div className="wipe-handle" style={{ left: `${wipe}%` }} /></>}
         <span className="panel-tag">{wiping ? 'DRAG TO WIPE · ' : ''}{format.name.toUpperCase()} · {zoom.toFixed(2)}×{score != null && comparable && !iso && <b> · ΔE {score.toFixed(1)}</b>}</span>
