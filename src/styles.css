@@ -16,3 +16,35 @@ details{margin:-4px 0 6px}summary{cursor:pointer;font:9px 'DM Mono';letter-spaci
 .inks{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}.inks button,.xyz .small{border:1px solid #ffffff26;background:transparent;color:#aeb1aa;padding:6px 8px;font:10px 'DM Mono';cursor:pointer;display:flex;gap:5px;align-items:center}.inks button i{width:9px;height:9px;border:1px solid #fff6;display:inline-block}.inks .active{border-color:#e8f49d;color:#f3f9cd;background:#e8f49d15}.inks .custom{border:1px solid #ffffff26;display:flex;align-items:center;padding:0 6px}.inks .custom input{border:0;padding:0;width:22px;height:16px;background:transparent;cursor:pointer}.xyz .small{align-self:center;justify-content:center}
 .gray .generated canvas:not(.title-layer),.gray .thumb canvas:not(.title-layer){filter:grayscale(1)}
 .themes .save-size{margin-top:8px}.themes .save-go{width:100%;margin-top:8px;padding:10px;border-color:#e8f49d88;color:#f3f9cd;text-transform:none}.themes .save-go:disabled{opacity:.4;cursor:default}
+/* Three panes: start (left) · picture + tweak drawer (centre) · project + export (right) */
+main{grid-template-columns:272px minmax(0,1fr) 304px}
+.pane{padding:22px 20px 28px;overflow:auto}.pane.left{border-left:0;border-right:1px solid #ffffff12}
+.pane header h1{font-size:19px;margin:0 0 4px}.pane header h1 em{display:block}.pane .themes{padding-top:16px}.pane .controls{padding-top:4px}
+.corner-title.first{border-top:0;margin-top:0;padding-top:0}
+.row-title{display:flex;justify-content:space-between;align-items:center}
+.lock{border:0!important;background:none!important;padding:0 2px!important;font-size:12px!important;opacity:.45;cursor:pointer}.lock.on{opacity:1}.lock:hover{opacity:.9}
+.roll-all small{opacity:.6}
+.themes .history{display:grid;grid-template-columns:repeat(4,1fr);gap:5px}.themes .history button{padding:0;aspect-ratio:1.4;overflow:hidden;background:#111316}.history img{width:100%;height:100%;object-fit:cover;display:block}.themes .history button:hover{border-color:#efff9a}
+/* Tweak drawer */
+.drawer{background:#181a1c;border-top:1px solid #ffffff14;min-height:0}
+.drawer nav{display:flex;gap:4px;align-items:center;padding:8px 14px}.drawer nav span{margin-left:auto;font:9px 'DM Mono';letter-spacing:.16em;color:#70746e}
+.drawer nav button{border:1px solid transparent;background:transparent;color:#aeb1aa;padding:6px 11px;font:10px 'DM Mono';letter-spacing:.08em;cursor:pointer}.drawer nav button.active{border-color:#e8f49d;color:#f3f9cd;background:#e8f49d15}.drawer nav .fold{border-color:#ffffff26}
+.drawer-body{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:2px 26px;align-items:start;max-height:min(270px,32vh);overflow:auto;padding:4px 20px 14px}
+.drawer-body .corner{margin:0}
+/* Project */
+.project-name{width:100%;background:#111316;border:1px solid #ffffff26;color:#ece9e2;padding:9px 10px;font:13px 'DM Mono';margin-bottom:8px}
+.project .save-go{margin-top:0}.note{color:#efff9a;margin:8px 0 0}
+.projects{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}.projects li{display:flex;gap:4px}
+.themes .projects .open{flex:1;display:flex;justify-content:space-between;gap:8px;text-align:left;text-transform:none;color:#d3d5cc}.projects .open small{color:#70746e}
+.themes .projects li.active .open{border-color:#e8f49d;color:#f3f9cd;background:#e8f49d15}.themes .projects .del{min-width:30px;text-transform:none}
+.projects .empty{font:10px/1.6 'DM Mono';color:#70746e}
+/* Export: the format thumbnails are the export list */
+.themes .thumbs{display:grid;grid-template-columns:1fr 1fr;gap:12px 10px;height:auto;padding:0;border:0;align-items:end;margin-bottom:10px}
+.themes .thumb{display:flex;flex-direction:column;gap:5px;height:auto;aspect-ratio:auto;border:0;background:none;overflow:visible;cursor:default}.themes .thumb:last-child{grid-column:span 2}
+.themes .thumb-view{position:relative;display:block;padding:0;width:min(100%,calc(104px * var(--ar)));aspect-ratio:var(--ar);border:1px solid #ffffff2a;background:#111316;overflow:hidden;cursor:pointer}
+.themes .thumb-view:hover{border-color:#efff9a88}.themes .thumb.focused .thumb-view{border-color:#efff9a}
+.tick{display:flex;gap:5px;align-items:center;font:8px 'DM Mono';letter-spacing:.12em;color:#a6aaa7;cursor:pointer}.tick input{margin:0;accent-color:#eaf6a5}
+.themes .all{padding:3px 8px;font-size:9px}
+.projects.starters{display:grid;grid-template-columns:1fr 1fr;gap:4px}
+.themes .thumb-view{width:min(100%,calc(84px * var(--ar)))}
+.pane .corner-title{padding-top:15px;margin-top:12px}

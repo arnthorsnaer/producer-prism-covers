@@ -4,7 +4,8 @@ import { Canvas, useThree } from '@react-three/fiber'
 import { Line, OrbitControls, OrthographicCamera, PerspectiveCamera } from '@react-three/drei'
 import * as THREE from 'three'
 import { GRID, PRISM, SURFACE, VIEW, gridFor, prismTriangles, faceNormal, facetCentre, randomShape, type Shape } from './prism'
-import { CONE_MAX, CROSS_N, DECAY, NO_CROSS, randomRig, themes, type Cross, type Lamp, type Rig } from './rig'
+import { CONE_MAX, CROSS_N, DECAY, NO_CROSS, randomRig, type Cross, type Lamp, type MoodName, type Rig } from './rig'
+import { DEFAULT_LOOK, STARTERS, exportProject, importProject, listProjects, loadSession, newId, slug, storeProjects, storeSession, type Locks, type Look, type Project, type Session } from './projects'
 import { deltaE, lab, type RGB } from './color'
 import { INKS, TITLE, drawTitle, fontsReady, inkColor, layoutTitle, meanColor, pickInk, sampleBox, type Ink, type RGB8, type Title } from './title'
 import './styles.css'
@@ -302,17 +303,72 @@ function CrossControls({ cross, set }: { cross: Cross; set: (c: Cross) => void }
   </div>
 }
 
+const boot = loadSession()
+const DRAWER_TABS = [['light', 'Light'], ['shape', 'Shape'], ['title', 'Title'], ['room', 'Room']] as const
+const MOODS = [['any', '🎲 anything'], ['day', '☀ day'], ['night', '☾ night']] as const
+type HistoryEntry = { look: Look; thumb: string }
+
 function App() {
-  const [rig, setRig] = useState<Rig>(themes.reference), [theme, setTheme] = useState('reference'), [base, setBase] = useState<Rig>(themes.reference)
+  // The look: everything that makes the picture (and what a project saves).
+  const [rig, setRig] = useState<Rig>(boot?.look.rig ?? DEFAULT_LOOK.rig), [base, setBase] = useState<Rig>(boot?.look.base ?? DEFAULT_LOOK.base)
+  const [shape, setShape] = useState<Shape>(boot?.look.shape ?? PRISM), [zoom, setZoom] = useState(boot?.look.zoom ?? 1)
+  // Master dimmer: scales every lamp and the room light together, so a roll's
+  // balance of colours is kept. It sits outside the rig and survives new rolls.
+  const [master, setMaster] = useState(boot?.look.master ?? 1)
+  const [title, setTitle] = useState<Title>(boot?.look.title ?? TITLE), [gray, setGray] = useState(boot?.look.gray ?? false)
+  const look: Look = useMemo(() => ({ rig, base, shape, zoom, master, title, gray }), [rig, base, shape, zoom, master, title, gray])
+  const applyLook = (l: Look) => { setRig(l.rig); setBase(l.base); setShape(l.shape); setZoom(l.zoom); setMaster(l.master); setTitle(l.title); setGray(l.gray) }
+
+  // Workspace.
   const [iso, setIso] = useState(() => location.hash === '#iso'), [compare, setCompare] = useState<Compare>('none')
-  const [formatId, setFormatId] = useState<Format['id']>('landscape'), [zoom, setZoom] = useState(1)
-  // Formats to save: null follows the focused format; ticking chips picks a set.
-  const [picked, setPicked] = useState<Format['id'][] | null>(null), [scale, setScale] = useState<1 | 2>(1)
+  const [formatId, setFormatId] = useState<Format['id']>((boot?.formatId as Format['id']) ?? 'landscape')
+  // Formats to save: null follows the focused format; ticking thumbnails picks a set.
+  const [picked, setPicked] = useState<Format['id'][] | null>((boot?.picked as Format['id'][]) ?? null), [scale, setScale] = useState<1 | 2>(boot?.scale ?? 1)
   const toSave = FORMATS.filter((f) => (picked ?? [formatId]).includes(f.id)), allPicked = toSave.length === FORMATS.length
   const pick = (id: Format['id']) => { const now = toSave.map((f) => f.id); setPicked(now.includes(id) ? now.filter((x) => x !== id) : [...now, id]) }
   const format = FORMATS.find((f) => f.id === formatId)!
+  const [locks, setLocks] = useState<Locks>(boot?.locks ?? { lights: false, shape: false, zoom: false })
+  const [drawer, setDrawer] = useState<string | null>(boot?.drawer === undefined ? 'light' : boot.drawer)
   const [score, setScore] = useState<number | null>(null), [wipe, setWipe] = useState(50)
-  const [title, setTitle] = useState<Title>(TITLE), [gray, setGray] = useState(false)
+
+  // Projects. Starters (the old scenes) are read-only; saving one makes a copy.
+  const [projects, setProjects] = useState<Project[]>(listProjects)
+  const [current, setCurrent] = useState<Session['current']>(boot?.current ?? { id: STARTERS[0].id, name: STARTERS[0].name })
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null), [note, setNote] = useState<string | null>(null)
+  const saved = [...projects, ...STARTERS].find((p) => p.id === current.id)
+  const dirty = !saved || JSON.stringify(saved.look) !== JSON.stringify(look) || (!saved.starter && saved.name !== current.name)
+  const keep = (ps: Project[]) => { setProjects(ps); storeProjects(ps) }
+  const flash = (msg: string) => { setNote(msg); setTimeout(() => setNote(null), 2500) }
+  const saveProject = (asNew: boolean) => {
+    const name = current.name.trim() || 'Untitled'
+    if (!asNew && saved && !saved.starter) {
+      keep(projects.map((p) => (p.id === saved.id ? { ...p, name, look, savedAt: Date.now() } : p)))
+      setCurrent({ id: saved.id, name }); flash(`Saved “${name}”`)
+    } else {
+      const copyName = saved && name === saved.name ? `${name} copy` : name
+      const p: Project = { id: newId(), name: copyName, savedAt: Date.now(), look }
+      keep([p, ...projects]); setCurrent({ id: p.id, name: copyName }); flash(`Saved “${copyName}”`)
+    }
+  }
+  // Starters bring their lights, shape and zoom but keep your title.
+  const openProject = (p: Project) => { applyLook(p.starter ? { ...p.look, title } : p.look); setCurrent({ id: p.id, name: p.name }); setConfirmDelete(null) }
+  const deleteProject = (p: Project) => {
+    if (confirmDelete !== p.id) return setConfirmDelete(p.id)
+    keep(projects.filter((x) => x.id !== p.id)); setConfirmDelete(null)
+    if (current.id === p.id) setCurrent({ id: null, name: current.name })
+  }
+  const importRef = useRef<HTMLInputElement>(null)
+  const onImport = async (file?: File) => {
+    if (!file) return
+    try {
+      const { name, look: l } = await importProject(file), p: Project = { id: newId(), name, savedAt: Date.now(), look: l }
+      keep([p, ...projects]); applyLook(l); setCurrent({ id: p.id, name }); flash(`Imported “${name}”`)
+    } catch (e) { flash((e as Error).message) }
+  }
+
+  // The working state is autosaved, so a reload or a closed tab resumes here.
+  useEffect(() => { storeSession({ current, look, formatId, picked, scale, locks, drawer }) }, [current, look, formatId, picked, scale, locks, drawer])
+
   // One auto ink for all formats, judged on everything under every title.
   const samples = useRef(new Map<string, Uint8ClampedArray>()), [autoInk, setAutoInk] = useState<string>(INKS.white)
   useEffect(() => {
@@ -326,6 +382,7 @@ function App() {
     return () => clearInterval(id)
   }, [])
   const ink = inkColor(title, autoInk)
+
   const shoot = useRef<Shoot | null>(null), [saving, setSaving] = useState<string | null>(null)
   const download = async (scale: number, formats: readonly Format[]) => {
     if (!shoot.current) return
@@ -334,30 +391,54 @@ function App() {
       const stamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-')
       for (const f of formats) {
         const url = URL.createObjectURL(await shoot.current(scale, f, zoom, title, gray, ink))
-        Object.assign(document.createElement('a'), { href: url, download: `prism-${theme}${gray ? '-gray' : ''}-${f.id}-${f.out[0] * scale}x${f.out[1] * scale}-${stamp}.png` }).click()
+        Object.assign(document.createElement('a'), { href: url, download: `${slug(current.name)}${gray ? '-gray' : ''}-${f.id}-${f.out[0] * scale}x${f.out[1] * scale}-${stamp}.png` }).click()
         setTimeout(() => URL.revokeObjectURL(url), 10000)
       }
       setSaving(null)
     } catch (e) { setSaving((e as Error).message) }
   }
-  // Master dimmer: scales every lamp and the room light together, so a roll's
-  // balance of colours is kept. It sits outside the rig and survives new rolls.
-  const [master, setMaster] = useState(1), [shape, setShape] = useState<Shape>(PRISM)
-  const shapeRange = (label: string, key: keyof Shape, min: number, max: number, step = 0.01) => range(label, shape[key], (v) => setShape({ ...shape, [key]: v }), min, max, step, (n) => n.toFixed(2))
+
   // The under-glow sits right under the top of the bulge and shines up at it.
   const lit = useMemo(() => ({
     ...rig, roomStrength: rig.roomStrength * master, cross: { ...(rig.cross ?? NO_CROSS), intensity: (rig.cross ?? NO_CROSS).intensity * master },
     lamps: rig.lamps.map((l) => ({ ...l, intensity: l.intensity * master, ...(l.id === 'under' && { pos: [shape.cx, shape.cy, l.pos[2]] as Lamp['pos'], aim: [shape.cx, shape.cy] as Lamp['aim'] }) })),
   }), [rig, master, shape])
-  const load = (name: string, r: Rig) => { setTheme(name); setBase(r); setRig(r) }
-  const randomZoom = () => setZoom(Math.round(2 ** (-1.5 + Math.random() * 2.7) * 100) / 100)
-  // The master roll: lights (in a random mood), shape and zoom at once.
-  const rollEverything = () => {
-    load('random-everything', randomRig((['any', 'day', 'night'] as const)[Math.floor(Math.random() * 3)]))
-    setShape(randomShape('all', shape)); randomZoom()
+
+  // Dice. Every roll lands in the history strip, so a good one is never lost.
+  // "Randomize everything" skips whatever is locked.
+  const [history, setHistory] = useState<HistoryEntry[]>([]), [rolled, setRolled] = useState<Look | null>(null)
+  const randomZoom = () => Math.round(2 ** (-1.5 + Math.random() * 2.7) * 100) / 100
+  const roll = (what: { lights?: MoodName; shape?: 'all' | 'move'; zoom?: boolean }) => {
+    const next = { ...look }
+    if (what.lights) { const r = randomRig(what.lights); next.rig = r; next.base = r }
+    if (what.shape) next.shape = randomShape(what.shape, look.shape)
+    if (what.zoom) next.zoom = randomZoom()
+    applyLook(next); setRolled(next)
   }
-  const choose = (name: string) => load(name, themes[name])
+  const rollEverything = () => roll({
+    lights: locks.lights ? undefined : (['any', 'day', 'night'] as const)[Math.floor(Math.random() * 3)],
+    shape: locks.shape ? undefined : 'all', zoom: !locks.zoom,
+  })
+  useEffect(() => {
+    if (!rolled) return
+    // Give the main view a moment to draw the new roll, then keep a small copy of it.
+    const t = setTimeout(() => {
+      const gl = document.querySelector<HTMLCanvasElement>('.generated canvas:not(.title-layer)')
+      let thumb = ''
+      if (gl?.width) {
+        const c = Object.assign(document.createElement('canvas'), { width: 120, height: Math.round((120 * gl.height) / gl.width) })
+        c.getContext('2d')!.drawImage(gl, 0, 0, c.width, c.height); thumb = c.toDataURL('image/jpeg', 0.75)
+      }
+      setHistory((h) => [{ look: rolled, thumb }, ...h].slice(0, 12)); setRolled(null)
+    }, 300)
+    return () => clearTimeout(t)
+  }, [rolled])
+  const lockable = (key: keyof Locks) => <button className={`lock ${locks[key] ? 'on' : ''}`} onClick={() => setLocks({ ...locks, [key]: !locks[key] })}
+    title={locks[key] ? 'Locked: Randomize everything leaves this alone' : 'Lock to keep this when you randomize everything'}>{locks[key] ? '🔒' : '🔓'}</button>
+  const lockedCount = Object.values(locks).filter(Boolean).length
+
   const setLamp = (l: Lamp) => setRig((r) => ({ ...r, lamps: r.lamps.map((x) => (x.id === l.id ? l : x)) }))
+  const shapeRange = (label: string, key: keyof Shape, min: number, max: number, step = 0.01) => range(label, shape[key], (v) => setShape({ ...shape, [key]: v }), min, max, step, (n) => n.toFixed(2))
   const toggle = (mode: Compare) => setCompare(compare === mode ? 'none' : mode)
   const wiping = compare === 'wipe' && !iso
   // The reference is only comparable in landscape at zoom 1.
@@ -367,7 +448,51 @@ function App() {
     const r = e.currentTarget.getBoundingClientRect()
     setWipe(Math.min(100, Math.max(0, ((e.clientX - r.left) / r.width) * 100)))
   }
-  return <main className={gray ? "gray" : ""}>
+  const date = (t: number) => new Date(t).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
+
+  return <main className={gray ? 'gray' : ''}>
+    {/* LEFT · the big, early moves: dice, history, title, overall light. */}
+    <aside className="pane left">
+      <header><p>LIGHT LAB / 01</p><h1>Glass prism <em>in colored light.</em></h1></header>
+      <section className="themes">
+        <button className="roll-all" onClick={rollEverything} title="Roll lights, shape and zoom together, except what is locked">
+          🎲 Randomize everything{lockedCount ? <small> · {lockedCount} locked</small> : null}</button>
+        <p className="corner-title row-title">LIGHTS {lockable('lights')}</p><div>
+          {MOODS.map(([mood, label]) => <button key={mood} onClick={() => roll({ lights: mood })} title="Roll the dice on every light">{label}</button>)}
+          <button onClick={() => setRig(base)} title="Undo light edits back to the last roll or loaded project">↺ reset</button>
+        </div>
+        <p className="corner-title row-title">SHAPE {lockable('shape')}</p><div>
+          <button onClick={() => roll({ shape: 'all' })} title="Roll where the bulge sits, how bulgy and how wide; pattern and under-glow follow">🎲 bulge</button>
+          <button onClick={() => roll({ shape: 'move' })} title="Move the top of the bulge only; pattern and under-glow follow">🎲 position</button>
+          <button onClick={() => setShape(PRISM)} className={shape === PRISM ? 'active' : ''}>↺ default</button>
+        </div>
+        <p className="corner-title row-title">ZOOM {lockable('zoom')}</p><div>
+          <button onClick={() => roll({ zoom: true })} title="Roll how close the camera is">🎲 zoom</button>
+          <button onClick={() => setZoom(1)} className={zoom === 1 ? 'active' : ''}>↺ 1×</button>
+        </div>
+        <label className="range"><span>Zoom (− out · + in)<b>{zoom.toFixed(2)}×</b></span><input type="range" min={ZOOM_MIN} max={ZOOM_MAX} step={0.01} value={Math.log2(zoom)} onChange={(e) => setZoom(Math.round(2 ** +e.target.value * 100) / 100)} onDoubleClick={() => setZoom(1)} title="Camera height over the land · double-click for 1×" /></label>
+        {history.length > 0 && <><p className="corner-title">RECENT ROLLS</p>
+          <div className="history">{history.map((h, k) => <button key={k} onClick={() => applyLook(h.look)} title="Go back to this roll">{h.thumb ? <img src={h.thumb} alt="" /> : '·'}</button>)}</div></>}
+      </section>
+      <section className="controls">
+        <p className="corner-title">TITLE</p>
+        <div className="title-row">
+          <input className="title-text" value={title.text} onChange={(e) => setTitle({ ...title, text: e.target.value })} placeholder="Title" spellCheck={false} />
+          <label className="check"><input type="checkbox" checked={title.show} onChange={(e) => setTitle({ ...title, show: e.target.checked })} />show</label>
+        </div>
+        <div className="inks">
+          {(['auto', 'white', 'gray', 'black'] as const).map((k) => <button key={k} className={title.ink === k ? 'active' : ''} onClick={() => setTitle({ ...title, ink: k })}
+            title={k === 'auto' ? 'White, dark gray or black, whichever reads best over what is under it in every format' : undefined}>{k === 'auto' ? 'auto' : <><i style={{ background: INKS[k] }} />{k}</>}</button>)}
+          <label className={`custom ${title.ink.startsWith('#') ? 'active' : ''}`} title="Custom colour"><input type="color" value={title.ink.startsWith('#') ? title.ink : '#ffffff'} onChange={(e) => setTitle({ ...title, ink: e.target.value as Ink })} /></label>
+        </div>
+        <p className="corner-title">FINISH</p>
+        <div className="inks">{([[false, 'Colour'], [true, 'Grayscale']] as const).map(([g, label]) => <button key={label} className={gray === g ? 'active' : ''} onClick={() => setGray(g)}
+          title={g ? 'Black and white artwork, on screen and in exports (the title keeps its colour)' : 'Full colour'}>{label}</button>)}</div>
+        <label className="range master"><span>All lights<b>{Math.round(master * 100)}%</b></span><input type="range" min={0} max={1.5} step={0.01} value={master} onChange={(e) => setMaster(+e.target.value)} onDoubleClick={() => setMaster(1)} title="Dims or boosts every light at once · double-click for 100%" /></label>
+      </section>
+    </aside>
+
+    {/* CENTRE · the picture, with the detailed tweaks in a drawer underneath. */}
     <section className="stage">
     <div className={`main-view compare-${compare}`}>
       <div className={`visual generated ${wiping ? 'wiping' : ''}`} onPointerDown={drag} onPointerMove={drag}>
@@ -377,89 +502,94 @@ function App() {
         <span className="panel-tag">{wiping ? 'DRAG TO WIPE · ' : ''}{format.name.toUpperCase()} · {zoom.toFixed(2)}×{score != null && comparable && !iso && <b> · ΔE {score.toFixed(1)}</b>}</span>
       </div>
       {(compare === 'side' || compare === 'stack') && <figure className="visual reference"><img src={REFERENCE} alt="Geometric abstract reference" /><figcaption>REFERENCE IMAGE</figcaption></figure>}
-      <div className="label"><i></i>PRISMATIC STUDY <small>ENDLESS LAND · SHAPE & LIGHTING LIVE</small></div>
+      <div className="label"><i></i>{current.name.toUpperCase() || 'UNTITLED'}{dirty && <small>UNSAVED CHANGES</small>}</div>
       <div className="view-bar">
         <button className="view" onClick={() => setIso(!iso)}>{iso ? 'TOP DOWN' : 'ISOMETRIC'} <span>↗</span></button>
         <button className={`compare ${compare === 'side' ? 'selected' : ''}`} onClick={() => toggle('side')}>SIDE × SIDE</button>
         <button className={`compare ${compare === 'stack' ? 'selected' : ''}`} onClick={() => toggle('stack')}>ABOVE / BELOW</button>
         <button className={`compare ${compare === 'wipe' ? 'selected' : ''}`} onClick={() => toggle('wipe')}>WIPE</button>
-        <button className={`compare ${gray ? 'selected' : ''}`} onClick={() => setGray(!gray)} title="Show and save the artwork in black and white (the title keeps its colour)">GRAYSCALE</button>
       </div>
     </div>
-    <div className="thumbs">
-      {FORMATS.filter((f) => f.id !== formatId).map((f) =>
-        <button key={f.id} className="thumb" style={{ '--ar': f.ar } as React.CSSProperties} onClick={() => setFormatId(f.id)} title={`Focus ${f.name}`}>
-          <Scene rig={lit} shape={shape} format={f} zoom={zoom} />
-          <TitleOverlay title={title} win={windowOf(f, zoom)} gray={gray} ink={ink} samples={samples} id={f.id} />
-          <span>{f.name.toUpperCase()}</span>
-        </button>)}
+    <div className={`drawer ${drawer ? 'open' : ''}`}>
+      <nav>{DRAWER_TABS.map(([id, label]) => <button key={id} className={drawer === id ? 'active' : ''} onClick={() => setDrawer(drawer === id ? null : id)}>{label}</button>)}
+        <span>TWEAK</span><button className="fold" onClick={() => setDrawer(drawer ? null : 'light')} title={drawer ? 'Fold away' : 'Open'}>{drawer ? '▾' : '▴'}</button></nav>
+      {drawer && <div className="drawer-body controls">
+        {drawer === 'light' && <>{rig.lamps.map((l) => <LampControls key={l.id} lamp={l} set={setLamp} />)}
+          <CrossControls cross={rig.cross ?? NO_CROSS} set={(cross) => setRig({ ...rig, cross })} /></>}
+        {drawer === 'shape' && <>
+          {shapeRange('Bulge (− = bowl)', 'dome', -3, 4)}
+          {shapeRange('Top X (pattern + glow follow)', 'cx', VIEW.cx - VIEW.w * 0.75, VIEW.cx + VIEW.w * 0.75)}
+          {shapeRange('Top Y (pattern + glow follow)', 'cy', VIEW.cy - VIEW.h * 0.75, VIEW.cy + VIEW.h * 0.75)}
+          {shapeRange('Spread', 'spread', 0.4, 2.5)}
+          {shapeRange('Profile (1 pyramid · 2 round)', 'profile', 0.8, 3)}
+          {shapeRange('Fold (per cell)', 'ridge', -0.3, 0.3, 0.005)}
+          {shapeRange('Pattern offset X (from top)', 'ox', -6, 6, 0.5)}
+          {shapeRange('Pattern offset Y (from top)', 'oy', -6, 6, 0.5)}</>}
+        {drawer === 'title' && <>
+          {range('Size (of a row)', title.size, (v) => setTitle({ ...title, size: v }), 0.25, 0.85, 0.01, (n) => `${Math.round(n * 100)}%`)}
+          {range('Letter spacing', title.spacing, (v) => setTitle({ ...title, spacing: v }), 0.1, 1.6, 0.01, (n) => n.toFixed(2))}
+          {range('Weight', title.weight, (v) => setTitle({ ...title, weight: v }), 300, 900, 100, (n) => String(n))}
+          {range('Across', title.u, (v) => setTitle({ ...title, u: v }), 0, 1, 0.01, (n) => n.toFixed(2))}
+          {range('Down', title.v, (v) => setTitle({ ...title, v }), 0, 1, 0.01, (n) => n.toFixed(2))}
+          <div><button className="small" onClick={() => setTitle({ ...title, u: TITLE.u, v: TITLE.v })}>↺ centre</button>
+            <p className="follows">Or drag it in the main view. One position for all formats; each snaps it to its own rows and columns.</p></div></>}
+        {drawer === 'room' && <>
+          <label className="color"><span>Room light</span><input type="color" value={rig.room} onChange={(e) => setRig({ ...rig, room: e.target.value })} /></label>
+          {range('Room intensity', rig.roomStrength, (v) => setRig({ ...rig, roomStrength: v }), 0, 3, 0.01, (n) => n.toFixed(2))}
+          {range('Exposure', rig.exposure, (v) => setRig({ ...rig, exposure: v }), 0.2, 3, 0.01, (n) => n.toFixed(2))}</>}
+      </div>}
     </div>
     </section>
-    <aside>
-      <header><p>LIGHT LAB / 01</p><h1>Glass prism<br /><em>in colored light.</em></h1><div className="rule" /></header>
-      <section className="themes"><button className="roll-all" onClick={rollEverything} title="Roll lights, shape and zoom together">🎲 Randomize everything</button>
-        <p className="corner-title">SCENES</p><div>
-        {Object.keys(themes).map((x) => <button onClick={() => choose(x)} className={theme === x ? 'active' : ''} key={x}>{x}</button>)}
-      </div><p className="corner-title">RANDOMIZE COLORS / LIGHTS</p><div>
-        {([['any', '🎲 anything'], ['day', '☀ day'], ['night', '☾ night']] as const).map(([mood, label]) =>
-          <button key={mood} onClick={() => load(`random-${mood}`, randomRig(mood))} className={theme === `random-${mood}` ? 'active' : ''} title="Roll the dice on every light">{label}</button>)}
-        <button onClick={() => setRig(base)}>↺ reset</button>
-      </div><p className="corner-title">RANDOMIZE SHAPE</p><div>
-        <button onClick={() => setShape(randomShape('all', shape))} title="Roll where the bulge sits, how bulgy and how wide; pattern and under-glow follow">🎲 bulge</button>
-        <button onClick={() => setShape(randomShape('move', shape))} title="Move the top of the bulge only; pattern and under-glow follow">🎲 position</button>
-        <button onClick={() => setShape(PRISM)} className={shape === PRISM ? 'active' : ''}>↺ default</button>
-      </div><p className="corner-title">RANDOMIZE ZOOM</p><div>
-        <button onClick={randomZoom} title="Roll how close the camera is">🎲 zoom</button>
-        <button onClick={() => setZoom(1)} className={zoom === 1 ? 'active' : ''}>↺ 1×</button>
-      </div><p className="corner-title">SAVE IMAGE</p><div>
-        <button className={allPicked ? 'active' : ''} onClick={() => setPicked(allPicked ? null : FORMATS.map((f) => f.id))} title="Every format">All</button>
-        {FORMATS.map((f) => <button key={f.id} className={toSave.includes(f) ? 'active' : ''} onClick={() => pick(f.id)} title={`${f.out[0] * scale}×${f.out[1] * scale} px`}>{f.name}</button>)}
-      </div><div className="save-size">
-        {([[1, 'Standard'], [2, '2× print']] as const).map(([k, label]) => <button key={k} className={scale === k ? 'active' : ''} onClick={() => setScale(k)}
-          title={k === 1 ? 'Landscape 3500×2500, cover 3000×3000, portrait 2160×3840, header 4500×1500' : 'Twice the pixels in each direction'}>{label}</button>)}
-      </div><div>
-        <button className="save-go" onClick={() => download(scale, toSave)} disabled={!toSave.length || saving?.endsWith('…')} title="Lossless PNG, sRGB, one file per format">
-          ⤓ Save {toSave.length === 1 ? `${toSave[0].name} PNG · ${toSave[0].out[0] * scale}×${toSave[0].out[1] * scale}` : `${toSave.length} PNGs`}</button>
-        {saving && <span className="saving">{saving}</span>}
-      </div></section>
-      <section className="controls">
-        <p>MASTER</p>
-        <label className="range master"><span>All lights<b>{Math.round(master * 100)}%</b></span><input type="range" min={0} max={1.5} step={0.01} value={master} onChange={(e) => setMaster(+e.target.value)} onDoubleClick={() => setMaster(1)} title="Dims or boosts every light at once · double-click for 100%" /></label>
-        <label className="range"><span>Zoom (− out · + in)<b>{zoom.toFixed(2)}×</b></span><input type="range" min={ZOOM_MIN} max={ZOOM_MAX} step={0.01} value={Math.log2(zoom)} onChange={(e) => setZoom(Math.round(2 ** +e.target.value * 100) / 100)} onDoubleClick={() => setZoom(1)} title="Camera height over the land · double-click for 1×" /></label>
-        <p className="corner-title">TITLE</p>
-        <div className="title-row">
-          <input className="title-text" value={title.text} onChange={(e) => setTitle({ ...title, text: e.target.value })} placeholder="Title" spellCheck={false} />
-          <label className="check"><input type="checkbox" checked={title.show} onChange={(e) => setTitle({ ...title, show: e.target.checked })} />show</label>
+
+    {/* RIGHT · keep it: projects (save / load) and delivery (export PNGs). */}
+    <aside className="pane right">
+      <section className="themes project">
+        <p className="corner-title first">PROJECT</p>
+        <input className="project-name" value={current.name} onChange={(e) => setCurrent({ ...current, name: e.target.value })} placeholder="Name, e.g. Song X" spellCheck={false} />
+        <div>
+          <button className="save-go" onClick={() => saveProject(false)} disabled={!dirty && !!saved && !saved.starter}
+            title={saved && !saved.starter ? 'Save over this project' : 'Save as a new project in this browser'}>{saved && !saved.starter ? (dirty ? '● Save' : '✓ Saved') : 'Save project'}</button>
+          {saved && !saved.starter && <button onClick={() => saveProject(true)} title="Keep the saved one and save this as another project">Save as new</button>}
+          <button onClick={() => exportProject({ name: current.name || 'Untitled', look })} title="Download this project as a file, for backup or another computer">⤓ File</button>
+          <button onClick={() => importRef.current?.click()} title="Open a project file">⤒ Open file</button>
+          <input ref={importRef} type="file" accept=".json,application/json" hidden onChange={(e) => { onImport(e.target.files?.[0]); e.target.value = '' }} />
         </div>
-        <div className="inks">
-          {(['auto', 'white', 'gray', 'black'] as const).map((k) => <button key={k} className={title.ink === k ? 'active' : ''} onClick={() => setTitle({ ...title, ink: k })}
-            title={k === 'auto' ? 'White, dark gray or black, whichever reads best over what is under it' : undefined}>{k === 'auto' ? 'auto' : <><i style={{ background: INKS[k] }} />{k}</>}</button>)}
-          <label className={`custom ${title.ink.startsWith('#') ? 'active' : ''}`} title="Custom colour"><input type="color" value={title.ink.startsWith('#') ? title.ink : '#ffffff'} onChange={(e) => setTitle({ ...title, ink: e.target.value as Ink })} /></label>
-        </div>
-        {range('Size (of a row)', title.size, (v) => setTitle({ ...title, size: v }), 0.25, 0.85, 0.01, (n) => `${Math.round(n * 100)}%`)}
-        {range('Letter spacing', title.spacing, (v) => setTitle({ ...title, spacing: v }), 0.1, 1.6, 0.01, (n) => n.toFixed(2))}
-        {range('Weight', title.weight, (v) => setTitle({ ...title, weight: v }), 300, 900, 100, (n) => String(n))}
-        <div className="xyz">{range('Across', title.u, (v) => setTitle({ ...title, u: v }), 0, 1, 0.01, (n) => n.toFixed(2))}{range('Down', title.v, (v) => setTitle({ ...title, v }), 0, 1, 0.01, (n) => n.toFixed(2))}
-          <button className="small" onClick={() => setTitle({ ...title, u: TITLE.u, v: TITLE.v })}>↺ centre</button></div>
-        <p className="follows">Drag it in the main view. One position for all formats; each snaps it to its own rows and columns.</p>
-        <p className="corner-title">SHAPE</p>
-        {shapeRange('Bulge (− = bowl)', 'dome', -3, 4)}
-        {shapeRange('Top X (pattern + glow follow)', 'cx', VIEW.cx - VIEW.w * 0.75, VIEW.cx + VIEW.w * 0.75)}
-        {shapeRange('Top Y (pattern + glow follow)', 'cy', VIEW.cy - VIEW.h * 0.75, VIEW.cy + VIEW.h * 0.75)}
-        {shapeRange('Spread', 'spread', 0.4, 2.5)}
-        {shapeRange('Profile (1 pyramid · 2 round)', 'profile', 0.8, 3)}
-        {shapeRange('Fold (per cell)', 'ridge', -0.3, 0.3, 0.005)}
-        {shapeRange('Pattern offset X (from top)', 'ox', -6, 6, 0.5)}
-        {shapeRange('Pattern offset Y (from top)', 'oy', -6, 6, 0.5)}
-        <p className="corner-title">ROOM & CAMERA</p>
-        <label className="color"><span>Room light</span><input type="color" value={rig.room} onChange={(e) => setRig({ ...rig, room: e.target.value })} /></label>
-        {range('Room intensity', rig.roomStrength, (v) => setRig({ ...rig, roomStrength: v }), 0, 3, 0.01, (n) => n.toFixed(2))}
-        {range('Exposure', rig.exposure, (v) => setRig({ ...rig, exposure: v }), 0.2, 3, 0.01, (n) => n.toFixed(2))}
-        <p className="corner-title">LAMPS</p>
-        {rig.lamps.map((l) => <LampControls key={l.id} lamp={l} set={setLamp} />)}
-        <CrossControls cross={rig.cross ?? NO_CROSS} set={(cross) => setRig({ ...rig, cross })} />
+        {note && <p className="note">{note}</p>}
+        <p className="corner-title">YOUR PROJECTS</p>
+        <ul className="projects">
+          {projects.length === 0 && <li className="empty">Nothing saved yet. Name it above and save; it stays in this browser.</li>}
+          {projects.map((p) => <li key={p.id} className={p.id === current.id ? 'active' : ''}>
+            <button className="open" onClick={() => openProject(p)}>{p.name}<small>{date(p.savedAt)}</small></button>
+            <button className="del" onClick={() => deleteProject(p)} title="Delete">{confirmDelete === p.id ? 'delete?' : '×'}</button>
+          </li>)}
+        </ul>
+        <p className="corner-title">STARTERS</p>
+        <ul className="projects starters">
+          {STARTERS.map((p) => <li key={p.id} className={p.id === current.id ? 'active' : ''}>
+            <button className="open" onClick={() => openProject(p)} title="Start from this look (keeps your title)">{p.name}</button></li>)}
+        </ul>
       </section>
-      <footer>ENDLESS FRESNEL LAND · FROSTED GLASS<br />COLOUR FROM LIGHT ONLY · ΔE LOWER = CLOSER</footer>
+      <section className="themes deliver">
+        <p className="corner-title row-title">EXPORT <button className={`all ${allPicked ? 'active' : ''}`} onClick={() => setPicked(allPicked ? null : FORMATS.map((f) => f.id))} title="Tick every format">All</button></p>
+        <div className="thumbs">
+          {FORMATS.map((f) => <div key={f.id} className={`thumb ${f.id === formatId ? 'focused' : ''}`} style={{ '--ar': f.ar } as React.CSSProperties}>
+            <button className="thumb-view" onClick={() => setFormatId(f.id)} title={`Show ${f.name} in the main view`}>
+              <Scene rig={lit} shape={shape} format={f} zoom={zoom} />
+              <TitleOverlay title={title} win={windowOf(f, zoom)} gray={gray} ink={ink} samples={samples} id={f.id} />
+            </button>
+            <label className="tick" title={`Export ${f.name} · ${f.out[0] * scale}×${f.out[1] * scale}`}><input type="checkbox" checked={toSave.includes(f)} onChange={() => pick(f.id)} />{f.name.toUpperCase()}</label>
+          </div>)}
+        </div>
+        <div className="save-size">
+          {([[1, 'Standard'], [2, '2× print']] as const).map(([k, label]) => <button key={k} className={scale === k ? 'active' : ''} onClick={() => setScale(k)}
+            title={k === 1 ? 'Landscape 3500×2500, cover 3000×3000, portrait 2160×3840, header 4500×1500' : 'Twice the pixels in each direction'}>{label}</button>)}
+        </div>
+        <div>
+          <button className="save-go" onClick={() => download(scale, toSave)} disabled={!toSave.length || saving?.endsWith('…')} title="Lossless PNG, sRGB, one file per format">
+            ⤓ Export {toSave.length === 1 ? `${toSave[0].name} PNG · ${toSave[0].out[0] * scale}×${toSave[0].out[1] * scale}` : `${toSave.length} PNGs`}</button>
+          {saving && <span className="saving">{saving}</span>}
+        </div>
+      </section>
     </aside>
   </main>
 }
