@@ -306,6 +306,10 @@ function App() {
   const [rig, setRig] = useState<Rig>(themes.reference), [theme, setTheme] = useState('reference'), [base, setBase] = useState<Rig>(themes.reference)
   const [iso, setIso] = useState(() => location.hash === '#iso'), [compare, setCompare] = useState<Compare>('none')
   const [formatId, setFormatId] = useState<Format['id']>('landscape'), [zoom, setZoom] = useState(1)
+  // Formats to save: null follows the focused format; ticking chips picks a set.
+  const [picked, setPicked] = useState<Format['id'][] | null>(null), [scale, setScale] = useState<1 | 2>(1)
+  const toSave = FORMATS.filter((f) => (picked ?? [formatId]).includes(f.id)), allPicked = toSave.length === FORMATS.length
+  const pick = (id: Format['id']) => { const now = toSave.map((f) => f.id); setPicked(now.includes(id) ? now.filter((x) => x !== id) : [...now, id]) }
   const format = FORMATS.find((f) => f.id === formatId)!
   const [score, setScore] = useState<number | null>(null), [wipe, setWipe] = useState(50)
   const [title, setTitle] = useState<Title>(TITLE), [gray, setGray] = useState(false)
@@ -407,9 +411,15 @@ function App() {
       </div><p className="corner-title">RANDOMIZE ZOOM</p><div>
         <button onClick={randomZoom} title="Roll how close the camera is">🎲 zoom</button>
         <button onClick={() => setZoom(1)} className={zoom === 1 ? 'active' : ''}>↺ 1×</button>
-      </div><p className="corner-title">SAVE IMAGE · {format.name.toUpperCase()}</p><div>
-        {[1, 2].map((k) => <button key={k} onClick={() => download(k, [format])} disabled={saving?.endsWith('…')} title="Lossless PNG of the focused format, sRGB">⤓ PNG {format.out[0] * k}×{format.out[1] * k}</button>)}
-        <button onClick={() => download(1, FORMATS)} disabled={saving?.endsWith('…')} title="One PNG per format, at 1×">⤓ all 4 formats</button>
+      </div><p className="corner-title">SAVE IMAGE</p><div>
+        <button className={allPicked ? 'active' : ''} onClick={() => setPicked(allPicked ? null : FORMATS.map((f) => f.id))} title="Every format">All</button>
+        {FORMATS.map((f) => <button key={f.id} className={toSave.includes(f) ? 'active' : ''} onClick={() => pick(f.id)} title={`${f.out[0] * scale}×${f.out[1] * scale} px`}>{f.name}</button>)}
+      </div><div className="save-size">
+        {([[1, 'Standard'], [2, '2× print']] as const).map(([k, label]) => <button key={k} className={scale === k ? 'active' : ''} onClick={() => setScale(k)}
+          title={k === 1 ? 'Landscape 3500×2500, cover 3000×3000, portrait 2160×3840, header 4500×1500' : 'Twice the pixels in each direction'}>{label}</button>)}
+      </div><div>
+        <button className="save-go" onClick={() => download(scale, toSave)} disabled={!toSave.length || saving?.endsWith('…')} title="Lossless PNG, sRGB, one file per format">
+          ⤓ Save {toSave.length === 1 ? `${toSave[0].name} PNG · ${toSave[0].out[0] * scale}×${toSave[0].out[1] * scale}` : `${toSave.length} PNGs`}</button>
         {saving && <span className="saving">{saving}</span>}
       </div></section>
       <section className="controls">
