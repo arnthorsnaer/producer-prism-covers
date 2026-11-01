@@ -5,8 +5,11 @@
 // centred in the outer ones. Tracking is what stretches to make that land. When
 // a format is too narrow for one line it breaks into two (or three).
 export type Ink = 'auto' | 'white' | 'gray' | 'black' | `#${string}`
-export type Title = { show: boolean; text: string; u: number; v: number; size: number; spacing: number; weight: number; ink: Ink }
+// docked (subtitle only): sits in the row under the title, on its axis, instead of at u, v.
+export type Title = { show: boolean; text: string; u: number; v: number; size: number; spacing: number; weight: number; ink: Ink; docked?: boolean }
 export const TITLE: Title = { show: true, text: 'FRAMEWORK', u: 0.5, v: 0.5, size: 0.55, spacing: 0.55, weight: 800, ink: 'auto' }
+// The subtitle: off until wanted; docked under the title; its auto ink follows the title's.
+export const SUBTITLE: Title = { show: false, text: 'SUBTITLE', u: 0.5, v: 0.62, size: 0.3, spacing: 0.45, weight: 500, ink: 'auto', docked: true }
 export const INKS = { white: '#f5f3ef', gray: '#4a4a4a', black: '#161616' } as const
 export const FONT = '"Big Shoulders", "Arial Narrow", sans-serif'
 export const fontsReady = (weight: number) => document.fonts.load(`${weight} 100px "Big Shoulders"`).catch(() => [])
@@ -14,11 +17,13 @@ export const fontsReady = (weight: number) => document.fonts.load(`${weight} 100
 // The window of land on screen, in world units (same shape as main.tsx's Win).
 type Win = { cx: number; cy: number; w: number; h: number }
 export type Box = { x: number; y: number; w: number; h: number }
-export type TitleLayout = { font: string; cap: number; pens: { ch: string; x: number; y: number }[]; box: Box }
+// row / axis: the block's bottom row and centre line in world units (for docking).
+export type TitleLayout = { font: string; cap: number; pens: { ch: string; x: number; y: number }[]; box: Box; row: number; axis: number }
 
-// Smallest cap height, as a share of the frame's short side, before the type
-// takes a band of 3 (5, …) rows so it doesn't vanish when zoomed out.
-const MIN_CAP = 0.035, MIN_TRACK = 0.08, MAX_LINES = 3
+// Smallest row, as a share of the frame's short side, before the type takes a
+// band of 3 (5, …) rows so it doesn't vanish when zoomed out. It depends on the
+// zoom only, so a small subtitle stays small next to its title.
+const MIN_ROW = 0.064, MIN_TRACK = 0.08, MAX_LINES = 3
 // Break into more lines rather than shrink the type below this share of its size.
 const KEEP_SIZE = 0.8
 
@@ -47,14 +52,14 @@ function splitLines(text: string, n: number): string[][] {
 // Lays the title out on a W×H px frame showing `win`. Each line sits in its
 // own row (or band of rows) and spans whole columns, its first and last
 // letters centred in the outer ones. Lines share one centre axis and one size.
-export function layoutTitle(ctx: CanvasRenderingContext2D, t: Title, win: Win, W: number, H: number): TitleLayout | null {
+export function layoutTitle(ctx: CanvasRenderingContext2D, t: Title, win: Win, W: number, H: number, dock?: { row: number; axis: number }): TitleLayout | null {
   if (!t.show || !t.text.trim()) return null
   const cell = W / win.w, left = win.cx - win.w / 2, top = win.cy + win.h / 2
   // Whole rows and columns fully inside the frame.
   const r0 = Math.ceil(win.cy - win.h / 2), r1 = Math.floor(top), c0 = Math.ceil(left), c1 = Math.floor(left + win.w)
   const rows = Math.max(1, r1 - r0)
   let span = 1
-  while (t.size * cell * span < MIN_CAP * Math.min(W, H) && span + 2 <= rows) span += 2
+  while (cell * span < MIN_ROW * Math.min(W, H) && span + 2 <= rows) span += 2
 
   ctx.font = `${t.weight} 100px ${FONT}`
   const capRatio = ctx.measureText('H').actualBoundingBoxAscent / 100 || 0.7
@@ -71,7 +76,7 @@ export function layoutTitle(ctx: CanvasRenderingContext2D, t: Title, win: Win, W
 
   // Columns: the block's centre snaps to a column line (even N) or a column
   // centre (odd N). A column of margin each side when the frame has room.
-  const xs = Math.round((left + t.u * win.w) * 2) / 2, odd = xs % 1 !== 0
+  const xs = dock ? dock.axis : Math.round((left + t.u * win.w) * 2) / 2, odd = xs % 1 !== 0
   const avail = c1 - c0 >= 5 ? c1 - c0 - 2 : c1 - c0
   const maxN = Math.max(odd ? 1 : 2, (avail % 2 === 1) === odd ? avail : avail - 1)
   const parity = (n: number, least: number) => { let k = Math.round(n); if ((k % 2 === 1) !== odd) k += n > k ? 1 : -1; return Math.min(maxN, Math.max(least, k)) }
@@ -114,7 +119,8 @@ export function layoutTitle(ctx: CanvasRenderingContext2D, t: Title, win: Win, W
 
   // Rows: the block of lines centred on the row holding v, kept inside the frame.
   const n = pick.lines.length, bandRows = n * span
-  const first = Math.min(Math.max(Math.floor(top - t.v * win.h) - Math.floor((n - 1) / 2) * span - (span - 1) / 2, r0), r1 - bandRows)
+  const want0 = dock ? dock.row - bandRows : Math.floor(top - t.v * win.h) - Math.floor((n - 1) / 2) * span - (span - 1) / 2
+  const first = Math.min(Math.max(want0, r0), r1 - bandRows)
   // `first` is the bottom row of the block; lines run top to bottom.
   const pens: TitleLayout['pens'] = []
   let bx0 = Infinity, bx1 = -Infinity
@@ -131,8 +137,17 @@ export function layoutTitle(ctx: CanvasRenderingContext2D, t: Title, win: Win, W
     bx0 = Math.min(bx0, inkL); bx1 = Math.max(bx1, m.gaps ? inkL + (own - 1) * cell + m.wf / 2 + m.wl / 2 : inkL + m.wf)
   })
   const yTop = (top - (first + bandRows - span / 2)) * cell - cap / 2, yBot = (top - (first + span / 2)) * cell + cap / 2
-  return { font: `${t.weight} ${px}px ${FONT}`, cap, pens, box: { x: bx0, y: yTop, w: bx1 - bx0, h: yBot - yTop } }
+  return { font: `${t.weight} ${px}px ${FONT}`, cap, pens, box: { x: bx0, y: yTop, w: bx1 - bx0, h: yBot - yTop }, row: first, axis }
 }
+
+// Title and subtitle together; a docked subtitle takes the row under the title.
+export type Texts = { title: TitleLayout | null; sub: TitleLayout | null }
+export function layoutTexts(ctx: CanvasRenderingContext2D, t: Title, s: Title, win: Win, W: number, H: number): Texts {
+  const title = layoutTitle(ctx, t, win, W, H)
+  return { title, sub: layoutTitle(ctx, s, win, W, H, s.docked && title ? { row: title.row, axis: title.axis } : undefined) }
+}
+// The patch the auto ink is judged on: under the title, or the subtitle alone.
+export const inkBox = (l: Texts) => (l.title ?? l.sub)?.box
 
 // The shadow's colour. Under light text it is black, which separates the
 // letters from the land. Under dark text black only reads as gray haze, so it

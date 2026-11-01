@@ -48,3 +48,19 @@ main{grid-template-columns:272px minmax(0,1fr) 304px}
 .projects.starters{display:grid;grid-template-columns:1fr 1fr;gap:4px}
 .themes .thumb-view{width:min(100%,calc(84px * var(--ar)))}
 .pane .corner-title{padding-top:15px;margin-top:12px}
+/* Left pane: words, generate, finish, tweak sections */
+main{grid-template-columns:300px minmax(0,1fr) 290px}
+.pane header p{margin:0}.words{padding-top:12px!important}
+.title-text.sub{font-size:13px;font-weight:500}
+.sub-title{margin:12px 0 7px;font-size:9px;color:#858a85;text-transform:uppercase}.sub-title .lock{margin-left:auto}
+details.more,details.tweak{border:1px solid #ffffff14;margin:0 0 6px}
+details.more{border:0;margin:2px 0 4px}
+details.more summary,details.tweak summary{cursor:pointer;font:10px 'DM Mono';letter-spacing:.08em;color:#aeb1aa;padding:9px 10px;list-style:none}
+details.more summary{padding:4px 0;color:#858a85;font-size:9px}
+
+details.tweak[open]{padding:0 10px 8px}details.tweak[open] summary{padding-left:0;padding-right:0}
+details.tweak .corner details summary{padding:4px 0}
+.xyz .small:disabled{opacity:.4;cursor:default}
+/* Right pane */
+.saving-as{font:600 17px 'Big Shoulders',sans-serif;letter-spacing:.14em;color:#ece9e2;margin:0 0 10px;display:flex;flex-direction:column;gap:3px}.saving-as small{font:9px 'DM Mono';letter-spacing:.1em;color:#70746e}
+.ticks{list-style:none;margin:0 0 10px;padding:0;display:flex;flex-direction:column;gap:7px}.ticks .tick{font-size:10px;letter-spacing:.06em;color:#d3d5cc}.ticks small{margin-left:auto;color:#70746e}

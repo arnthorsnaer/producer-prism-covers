@@ -5,9 +5,9 @@ import { Line, OrbitControls, OrthographicCamera, PerspectiveCamera } from '@rea
 import * as THREE from 'three'
 import { GRID, PRISM, SURFACE, VIEW, gridFor, surfaceZ, prismTriangles, faceNormal, facetCentre, randomShape, type Shape } from './prism'
 import { CONE_MAX, CROSS_N, DECAY, NO_CROSS, randomRig, type Cross, type Lamp, type MoodName, type Rig } from './rig'
-import { DEFAULT_LOOK, STARTERS, exportProject, importProject, listProjects, loadSession, newId, slug, storeProjects, storeSession, type Locks, type Look, type Project, type Session } from './projects'
+import { DEFAULT_LOOK, STARTERS, exportProject, importProject, listProjects, loadSession, nameOf, newId, slug, storeProjects, storeSession, type Locks, type Look, type Project } from './projects'
 import { deltaE, lab, type RGB } from './color'
-import { INKS, TITLE, drawTitle, fontsReady, inkColor, layoutTitle, meanColor, pickInk, sampleBox, type Ink, type RGB8, type Title } from './title'
+import { INKS, SUBTITLE, TITLE, drawTitle, fontsReady, inkBox, inkColor, layoutTexts, meanColor, pickInk, sampleBox, type Ink, type RGB8, type Title, type TitleLayout } from './title'
 import './styles.css'
 
 type Compare = 'none' | 'side' | 'stack' | 'wipe'
@@ -139,13 +139,13 @@ function toGray(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, 
 // canvas. Every tile shares the camera, so the shading is identical. Tone
 // mapping, sRGB and MSAA are as on screen; lamp helpers are hidden. The main
 // view builds land for every format's window, so it can export any of them.
-export type Shoot = (scale: number, f: Format, zoom: number, title: Title, gray: boolean, ink: string) => Promise<Blob>
+export type Shoot = (scale: number, f: Format, zoom: number, texts: TextSet, gray: boolean) => Promise<Blob>
 const TILE_W = 1750, TILE_H = 1250
 function Exporter({ shoot }: { shoot: React.MutableRefObject<Shoot | null> }) {
   const gl = useThree((s) => s.gl), scene = useThree((s) => s.scene), size = useThree((s) => s.size)
   useEffect(() => {
-    shoot.current = async (scale, f, zoom, title, gray, ink) => {
-      await fontsReady(title.weight)
+    shoot.current = async (scale, f, zoom, texts, gray) => {
+      await Promise.all([fontsReady(texts.title.weight), fontsReady(texts.subtitle.weight)])
       const W = f.out[0] * scale, H = f.out[1] * scale, dpr = gl.getPixelRatio(), win = windowOf(f, zoom)
       const out = Object.assign(document.createElement('canvas'), { width: W, height: H }), ctx = out.getContext('2d')!
       const cam = new THREE.OrthographicCamera(-win.w / 2, win.w / 2, win.h / 2, -win.h / 2, 0.1, CAM_Z * 4)
@@ -162,8 +162,10 @@ function Exporter({ shoot }: { shoot: React.MutableRefObject<Shoot | null> }) {
       if (helpers) helpers.visible = true
       gl.setPixelRatio(dpr); gl.setSize(size.width, size.height, false)
       // The title goes on last, in the ink every format shares; its shadow is tinted from the pixels under it.
-      const l = layoutTitle(ctx, title, win, W, H)
-      if (l) { const px = sampleBox(out, l.box, 1, 1), c = meanColor(px); drawTitle(ctx, l, ink, gray ? c.map(() => grayOf(...c)) as RGB8 : c) }
+      const t = layoutTexts(ctx, texts.title, texts.subtitle, win, W, H)
+      for (const [l, ink] of [[t.title, texts.ink], [t.sub, texts.subInk]] as const) {
+        if (l) { const c = meanColor(sampleBox(out, l.box, 1, 1)); drawTitle(ctx, l, ink, gray ? c.map(() => grayOf(...c)) as RGB8 : c) }
+      }
       return new Promise<Blob>((resolve, reject) => out.toBlob((b) => (b ? resolve(b) : reject(new Error('PNG encode failed'))), 'image/png'))
     }
     return () => { shoot.current = null }
@@ -191,9 +193,10 @@ function Spot({ lamp }: { lamp: Lamp }) {
 
 // Isometric only: the focused format's frame drawn on the land, and its title
 // floating over that area, laid out exactly as in the flat view.
-function IsoFrame({ win, shape, title, ink }: { win: Win; shape: Shape; title: Title; ink: string }) {
+function IsoFrame({ win, shape, texts }: { win: Win; shape: Shape; texts: TextSet }) {
+  const { title, subtitle } = texts
   const [fonts, setFonts] = useState(0)
-  useEffect(() => { fontsReady(title.weight).then(() => setFonts((n) => n + 1)) }, [title.weight])
+  useEffect(() => { Promise.all([fontsReady(title.weight), fontsReady(subtitle.weight)]).then(() => setFonts((n) => n + 1)) }, [title.weight, subtitle.weight])
   const { outline, posts, top, lid } = useMemo(() => {
     const x0 = win.cx - win.w / 2, x1 = win.cx + win.w / 2, y0 = win.cy - win.h / 2, y1 = win.cy + win.h / 2, N = 48
     const at = (x: number, y: number): Lamp['pos'] => [x, y, surfaceZ(x, y, shape) + 0.06]
@@ -211,17 +214,17 @@ function IsoFrame({ win, shape, title, ink }: { win: Win; shape: Shape; title: T
     const c = Object.assign(document.createElement('canvas'), { width: W, height: H }), ctx = c.getContext('2d')!
     // A card of frosted glass behind the type so it reads against the dark
     // room: light behind dark ink, dark behind light ink.
-    const n = parseInt(ink.slice(1), 16), light = grayOf(n >> 16, (n >> 8) & 255, n & 255) > 128
-    const l = layoutTitle(ctx, title, win, W, H)
-    if (l) {
-      const pad = l.cap * 0.6
+    const laid = layoutTexts(ctx, title, subtitle, win, W, H)
+    for (const [l, ink] of [[laid.title, texts.ink], [laid.sub, texts.subInk]] as const) {
+      if (!l) continue
+      const n = parseInt(ink.slice(1), 16), light = grayOf(n >> 16, (n >> 8) & 255, n & 255) > 128, pad = l.cap * 0.6
       ctx.fillStyle = light ? 'rgba(0, 0, 0, 0.45)' : 'rgba(255, 255, 255, 0.6)'
       ctx.fillRect(l.box.x - pad, l.box.y - pad, l.box.w + pad * 2, l.box.h + pad * 2)
       drawTitle(ctx, l, ink)
     }
     const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8
     return t
-  }, [title, ink, win.cx, win.cy, win.w, win.h, fonts]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [title, subtitle, texts.ink, texts.subInk, win.cx, win.cy, win.w, win.h, fonts]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => texture.dispose(), [texture])
   return <>
     <Line points={outline} color="#efff9a" lineWidth={2} />
@@ -232,8 +235,8 @@ function IsoFrame({ win, shape, title, ink }: { win: Win; shape: Shape; title: T
   </>
 }
 
-type SceneProps = { rig: Rig; shape: Shape; format: Format; zoom: number; iso?: boolean; isoTitle?: { title: Title; ink: string }; onScore?: (de: number | null) => void; shoot?: React.MutableRefObject<Shoot | null> }
-const Scene = memo(function Scene({ rig, shape, format, zoom, iso = false, isoTitle, onScore, shoot }: SceneProps) {
+type SceneProps = { rig: Rig; shape: Shape; format: Format; zoom: number; iso?: boolean; isoTexts?: TextSet; onScore?: (de: number | null) => void; shoot?: React.MutableRefObject<Shoot | null> }
+const Scene = memo(function Scene({ rig, shape, format, zoom, iso = false, isoTexts, onScore, shoot }: SceneProps) {
   const win = windowOf(format, zoom)
   // Land under this view; the main view (the one that exports) covers every
   // format's window, and the isometric view at least the original slab.
@@ -253,7 +256,7 @@ const Scene = memo(function Scene({ rig, shape, format, zoom, iso = false, isoTi
     {rig.lamps.map((l) => <Spot key={l.id} lamp={l} />)}
     <CrossLight cross={rig.cross ?? NO_CROSS} top={[shape.cx, shape.cy]} />
     <Prism shape={shape} grid={grid} />
-    <group name="helpers">{iso && isoTitle && <IsoFrame win={win} shape={shape} title={isoTitle.title} ink={isoTitle.ink} />}
+    <group name="helpers">{iso && isoTexts && <IsoFrame win={win} shape={shape} texts={isoTexts} />}
     {iso && (rig.cross?.intensity ?? 0) > 0 && [0, 1].map((axis) => { const c = rig.cross!, a = c.arm[axis]
       return <Line key={axis} points={[[shape.cx - (axis ? 0 : a), shape.cy - (axis ? a : 0), c.height], [shape.cx + (axis ? 0 : a), shape.cy + (axis ? a : 0), c.height]]} color={c.color} lineWidth={3} /> })}
     {iso && rig.lamps.map((l) => <group key={l.id}>
@@ -263,49 +266,68 @@ const Scene = memo(function Scene({ rig, shape, format, zoom, iso = false, isoTi
   </Canvas>
 })
 
-// The title over a view, drawn by the same code as the export. In auto ink it
-// re-reads the pixels under itself a few times a second. On the main view it can
-// be dragged; the drag sets the format-agnostic u, v and every format follows.
+// Title and subtitle over a view, drawn by the same code as the export. The
+// pixels under them are reported for the shared auto ink and tint each one's
+// shadow. On the main view both can be dragged; a drag sets the
+// format-agnostic u, v and every format follows (a dragged subtitle undocks).
 // Every view's pixels under its title, by format id. The app picks one auto
 // ink from all of them together, so every format (and the export) agrees.
 type Samples = React.MutableRefObject<Map<string, Uint8ClampedArray>>
-function TitleOverlay({ title, win, gray, ink, samples, id, onMove }: { title: Title; win: Win; gray: boolean; ink: string; samples: Samples; id: string; onMove?: (t: Title) => void }) {
+export type TextSet = { title: Title; subtitle: Title; ink: string; subInk: string }
+type Which = 'title' | 'subtitle'
+function TextOverlay({ texts, win, gray, samples, id, onMove }: { texts: TextSet; win: Win; gray: boolean; samples: Samples; id: string; onMove?: (which: Which, t: Title) => void }) {
   const ref = useRef<HTMLCanvasElement>(null), [size, setSize] = useState({ w: 0, h: 0 })
-  const [bg, setBg] = useState<RGB8>([0, 0, 0]), [fonts, setFonts] = useState(0)
-  useEffect(() => { fontsReady(title.weight).then(() => setFonts((n) => n + 1)) }, [title.weight])
+  const [bgs, setBgs] = useState<RGB8[]>([[0, 0, 0], [0, 0, 0]]), [fonts, setFonts] = useState(0)
+  const { title, subtitle } = texts
+  useEffect(() => { Promise.all([fontsReady(title.weight), fontsReady(subtitle.weight)]).then(() => setFonts((n) => n + 1)) }, [title.weight, subtitle.weight])
   useEffect(() => {
     const ro = new ResizeObserver(([e]) => setSize({ w: e.contentRect.width, h: e.contentRect.height }))
     ro.observe(ref.current!); return () => ro.disconnect()
   }, [])
-  const layout = useMemo(() => (size.w ? layoutTitle(ref.current!.getContext('2d')!, title, win, size.w, size.h) : null),
-    [title, win.cx, win.cy, win.w, win.h, size, fonts]) // eslint-disable-line react-hooks/exhaustive-deps
-  const color = ink
+  const layout = useMemo(() => (size.w ? layoutTexts(ref.current!.getContext('2d')!, title, subtitle, win, size.w, size.h) : null),
+    [title, subtitle, win.cx, win.cy, win.w, win.h, size, fonts]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     const c = ref.current!, dpr = devicePixelRatio, ctx = c.getContext('2d')!
     c.width = Math.round(size.w * dpr); c.height = Math.round(size.h * dpr)
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-    if (layout) drawTitle(ctx, layout, color, bg)
-  }, [layout, color, bg, size])
+    if (layout?.title) drawTitle(ctx, layout.title, texts.ink, bgs[0])
+    if (layout?.sub) drawTitle(ctx, layout.sub, texts.subInk, bgs[1])
+  }, [layout, texts.ink, texts.subInk, bgs, size])
   useEffect(() => {
     if (!layout) return
     const read = () => {
       const gl = ref.current?.parentElement?.querySelector<HTMLCanvasElement>('canvas:not(.title-layer)')
       if (!gl?.width) return
-      const px = sampleBox(gl, layout.box, gl.width / size.w, gl.height / size.h), c = meanColor(px), m = gray ? c.map(() => grayOf(...c)) as RGB8 : c
-      samples.current.set(id, px)
-      setBg((prev) => (prev.every((c, i) => Math.abs(c - m[i]) < 2) ? prev : m))
+      const sx = gl.width / size.w, sy = gl.height / size.h, box = inkBox(layout)
+      if (box) samples.current.set(id, sampleBox(gl, box, sx, sy))
+      const tint = (l: TitleLayout | null, prev: RGB8): RGB8 => {
+        if (!l) return prev
+        const c = meanColor(sampleBox(gl, l.box, sx, sy)), m = gray ? c.map(() => grayOf(...c)) as RGB8 : c
+        return prev.every((x, i) => Math.abs(x - m[i]) < 2) ? prev : m
+      }
+      setBgs((prev) => { const next = [tint(layout.title, prev[0]), tint(layout.sub, prev[1])]; return next[0] === prev[0] && next[1] === prev[1] ? prev : next })
     }
     read(); const timer = setInterval(read, 400); return () => clearInterval(timer)
   }, [layout, size, gray, samples, id])
   const grab = useRef<{ x: number; y: number; u: number; v: number } | null>(null)
   const clamp = (n: number) => Math.min(1, Math.max(0, n))
+  const handle = (which: Which, l: TitleLayout | null) => {
+    if (!onMove || !l) return null
+    const t = which === 'title' ? title : subtitle
+    return <div key={which} className="title-grab" title={`Drag to move the ${which} · it snaps to rows and columns in every format`}
+      style={{ left: l.box.x - 8, top: l.box.y - 8, width: l.box.w + 16, height: l.box.h + 16 }}
+      onPointerDown={(e) => {
+        e.stopPropagation(); e.currentTarget.setPointerCapture(e.pointerId)
+        // A docked subtitle starts its own position from where it sits now.
+        const u = t.docked ? (l.box.x + l.box.w / 2) / size.w : t.u, v = t.docked ? (l.box.y + l.box.h / 2) / size.h : t.v
+        grab.current = { x: e.clientX, y: e.clientY, u, v }
+      }}
+      onPointerMove={(e) => { const g = grab.current; if (!g) return; e.stopPropagation(); onMove(which, { ...t, docked: false, u: clamp(g.u + (e.clientX - g.x) / size.w), v: clamp(g.v + (e.clientY - g.y) / size.h) }) }}
+      onPointerUp={() => { grab.current = null }} />
+  }
   return <>
     <canvas ref={ref} className="title-layer" />
-    {onMove && layout && <div className="title-grab" title="Drag to move the title · it snaps to rows and columns in every format"
-      style={{ left: layout.box.x - 8, top: layout.box.y - 8, width: layout.box.w + 16, height: layout.box.h + 16 }}
-      onPointerDown={(e) => { e.stopPropagation(); e.currentTarget.setPointerCapture(e.pointerId); grab.current = { x: e.clientX, y: e.clientY, u: title.u, v: title.v } }}
-      onPointerMove={(e) => { const g = grab.current; if (!g) return; e.stopPropagation(); onMove({ ...title, u: clamp(g.u + (e.clientX - g.x) / size.w), v: clamp(g.v + (e.clientY - g.y) / size.h) }) }}
-      onPointerUp={() => { grab.current = null }} />}
+    {handle('title', layout?.title ?? null)}{handle('subtitle', layout?.sub ?? null)}
   </>
 }
 
@@ -348,9 +370,37 @@ function CrossControls({ cross, set }: { cross: Cross; set: (c: Cross) => void }
 }
 
 const boot = loadSession()
-const DRAWER_TABS = [['light', 'Light'], ['shape', 'Shape'], ['title', 'Title'], ['room', 'Room']] as const
 const MOODS = [['any', '🎲 anything'], ['day', '☀ day'], ['night', '☾ night']] as const
 type HistoryEntry = { look: Look; thumb: string }
+
+// Text, show, ink and (folded) size / spacing / weight / position, for the
+// title or the subtitle. The subtitle's auto ink is the title's.
+function TextControls({ t, set, kind }: { t: Title; set: (t: Title) => void; kind: Which }) {
+  const sub = kind === 'subtitle'
+  return <>
+    <div className="title-row">
+      <input className={`title-text ${sub ? 'sub' : ''}`} value={t.text} onChange={(e) => set({ ...t, text: e.target.value })} placeholder={sub ? 'Subtitle' : 'Title'} spellCheck={false} />
+      <label className="check"><input type="checkbox" checked={t.show} onChange={(e) => set({ ...t, show: e.target.checked })} />show</label>
+    </div>
+    <div className="inks">
+      {(['auto', 'white', 'gray', 'black'] as const).map((k) => <button key={k} className={t.ink === k ? 'active' : ''} onClick={() => set({ ...t, ink: k })}
+        title={k !== 'auto' ? undefined : sub ? 'Same colour as the title' : 'White, dark gray or black, whichever reads best over what is under it in every format'}>
+        {k === 'auto' ? (sub ? 'as title' : 'auto') : <><i style={{ background: INKS[k] }} />{k}</>}</button>)}
+      <label className={`custom ${t.ink.startsWith('#') ? 'active' : ''}`} title="Custom colour"><input type="color" value={t.ink.startsWith('#') ? t.ink : '#ffffff'} onChange={(e) => set({ ...t, ink: e.target.value as Ink })} /></label>
+    </div>
+    <details className="more"><summary>Size, spacing & position</summary>
+      {range('Size (of a row)', t.size, (v) => set({ ...t, size: v }), 0.2, 0.85, 0.01, (n) => `${Math.round(n * 100)}%`)}
+      {range('Letter spacing', t.spacing, (v) => set({ ...t, spacing: v }), 0.1, 1.6, 0.01, (n) => n.toFixed(2))}
+      {range('Weight', t.weight, (v) => set({ ...t, weight: v }), 300, 900, 100, (n) => String(n))}
+      {sub && t.docked
+        ? <p className="follows">Sits in the row under the title and moves with it. Drag it, or use the sliders, to place it freely.</p> : null}
+      <div className="xyz">{range('Across', t.u, (v) => set({ ...t, docked: false, u: v }), 0, 1, 0.01, (n) => n.toFixed(2))}{range('Down', t.v, (v) => set({ ...t, docked: false, v }), 0, 1, 0.01, (n) => n.toFixed(2))}
+        {sub ? <button className="small" onClick={() => set({ ...t, docked: true })} disabled={t.docked}>↺ under title</button>
+          : <button className="small" onClick={() => set({ ...t, u: TITLE.u, v: TITLE.v })}>↺ centre</button>}</div>
+      {!sub && <p className="follows">Or drag it in the main view. One position for all formats; each snaps it to its own rows and columns.</p>}
+    </details>
+  </>
+}
 
 function App() {
   // The look: everything that makes the picture (and what a project saves).
@@ -359,61 +409,62 @@ function App() {
   // Master dimmer: scales every lamp and the room light together, so a roll's
   // balance of colours is kept. It sits outside the rig and survives new rolls.
   const [master, setMaster] = useState(boot?.look.master ?? 1)
-  const [title, setTitle] = useState<Title>(boot?.look.title ?? TITLE), [gray, setGray] = useState(boot?.look.gray ?? false)
-  const look: Look = useMemo(() => ({ rig, base, shape, zoom, master, title, gray }), [rig, base, shape, zoom, master, title, gray])
-  const applyLook = (l: Look) => { setRig(l.rig); setBase(l.base); setShape(l.shape); setZoom(l.zoom); setMaster(l.master); setTitle(l.title); setGray(l.gray) }
+  const [title, setTitle] = useState<Title>(boot?.look.title ?? TITLE), [subtitle, setSubtitle] = useState<Title>(boot?.look.subtitle ?? SUBTITLE)
+  const [gray, setGray] = useState(boot?.look.gray ?? false)
+  const look: Look = useMemo(() => ({ rig, base, shape, zoom, master, title, subtitle, gray }), [rig, base, shape, zoom, master, title, subtitle, gray])
+  const applyLook = (l: Look) => { setRig(l.rig); setBase(l.base); setShape(l.shape); setZoom(l.zoom); setMaster(l.master); setTitle(l.title); setSubtitle(l.subtitle); setGray(l.gray) }
 
   // Workspace.
   const [iso, setIso] = useState(() => location.hash === '#iso'), [compare, setCompare] = useState<Compare>('none')
   const [formatId, setFormatId] = useState<Format['id']>((boot?.formatId as Format['id']) ?? 'landscape')
-  // Formats to save: null follows the focused format; ticking thumbnails picks a set.
+  // Formats to export: null follows the focused format; ticking picks a set.
   const [picked, setPicked] = useState<Format['id'][] | null>((boot?.picked as Format['id'][]) ?? null), [scale, setScale] = useState<1 | 2>(boot?.scale ?? 1)
   const toSave = FORMATS.filter((f) => (picked ?? [formatId]).includes(f.id)), allPicked = toSave.length === FORMATS.length
   const pick = (id: Format['id']) => { const now = toSave.map((f) => f.id); setPicked(now.includes(id) ? now.filter((x) => x !== id) : [...now, id]) }
   const format = FORMATS.find((f) => f.id === formatId)!
   const [locks, setLocks] = useState<Locks>(boot?.locks ?? { lights: false, shape: false, zoom: false })
-  const [drawer, setDrawer] = useState<string | null>(boot?.drawer === undefined ? 'light' : boot.drawer)
   const [score, setScore] = useState<number | null>(null), [wipe, setWipe] = useState(50)
 
-  // Projects. Starters (the old scenes) are read-only; saving one makes a copy.
+  // Projects are named by their title; several may share a name, told apart by
+  // when they were saved. Starters (the old scenes) are read-only.
   const [projects, setProjects] = useState<Project[]>(listProjects)
-  const [current, setCurrent] = useState<Session['current']>(boot?.current ?? { id: STARTERS[0].id, name: STARTERS[0].name })
+  const [current, setCurrent] = useState<string | null>(boot ? boot.current : STARTERS[0].id)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null), [note, setNote] = useState<string | null>(null)
-  const saved = [...projects, ...STARTERS].find((p) => p.id === current.id)
-  const dirty = !saved || JSON.stringify(saved.look) !== JSON.stringify(look) || (!saved.starter && saved.name !== current.name)
+  const saved = [...projects, ...STARTERS].find((p) => p.id === current)
+  const dirty = !saved || JSON.stringify(saved.look) !== JSON.stringify(look)
   const keep = (ps: Project[]) => { setProjects(ps); storeProjects(ps) }
   const flash = (msg: string) => { setNote(msg); setTimeout(() => setNote(null), 2500) }
+  const name = nameOf(look)
   const saveProject = (asNew: boolean) => {
-    const name = current.name.trim() || 'Untitled'
     if (!asNew && saved && !saved.starter) {
       keep(projects.map((p) => (p.id === saved.id ? { ...p, name, look, savedAt: Date.now() } : p)))
-      setCurrent({ id: saved.id, name }); flash(`Saved “${name}”`)
     } else {
-      const copyName = saved && name === saved.name ? `${name} copy` : name
-      const p: Project = { id: newId(), name: copyName, savedAt: Date.now(), look }
-      keep([p, ...projects]); setCurrent({ id: p.id, name: copyName }); flash(`Saved “${copyName}”`)
+      const p: Project = { id: newId(), name, savedAt: Date.now(), look }
+      keep([p, ...projects]); setCurrent(p.id)
     }
+    flash(`Saved “${name}”`)
   }
-  // Starters bring their lights, shape and zoom but keep your title.
-  const openProject = (p: Project) => { applyLook(p.starter ? { ...p.look, title } : p.look); setCurrent({ id: p.id, name: p.name }); setConfirmDelete(null) }
+  // Starters bring their lights, shape and zoom but keep your title and subtitle.
+  const openProject = (p: Project) => { applyLook(p.starter ? { ...p.look, title, subtitle } : p.look); setCurrent(p.id); setConfirmDelete(null) }
   const deleteProject = (p: Project) => {
     if (confirmDelete !== p.id) return setConfirmDelete(p.id)
     keep(projects.filter((x) => x.id !== p.id)); setConfirmDelete(null)
-    if (current.id === p.id) setCurrent({ id: null, name: current.name })
+    if (current === p.id) setCurrent(null)
   }
   const importRef = useRef<HTMLInputElement>(null)
   const onImport = async (file?: File) => {
     if (!file) return
     try {
       const { name, look: l } = await importProject(file), p: Project = { id: newId(), name, savedAt: Date.now(), look: l }
-      keep([p, ...projects]); applyLook(l); setCurrent({ id: p.id, name }); flash(`Imported “${name}”`)
+      keep([p, ...projects]); applyLook(l); setCurrent(p.id); flash(`Imported “${name}”`)
     } catch (e) { flash((e as Error).message) }
   }
 
   // The working state is autosaved, so a reload or a closed tab resumes here.
-  useEffect(() => { storeSession({ current, look, formatId, picked, scale, locks, drawer }) }, [current, look, formatId, picked, scale, locks, drawer])
+  useEffect(() => { storeSession({ current, look, formatId, picked, scale, locks }) }, [current, look, formatId, picked, scale, locks])
 
-  // One auto ink for all formats, judged on everything under every title.
+  // One auto ink for all formats, judged on everything under every title; the
+  // subtitle's auto ink is the title's colour.
   const samples = useRef(new Map<string, Uint8ClampedArray>()), [autoInk, setAutoInk] = useState<string>(INKS.white)
   useEffect(() => {
     const id = setInterval(() => {
@@ -425,8 +476,9 @@ function App() {
     }, 400)
     return () => clearInterval(id)
   }, [])
-  const ink = inkColor(title, autoInk)
-  const isoTitle = useMemo(() => (iso ? { title, ink } : undefined), [iso, title, ink])
+  const ink = inkColor(title, autoInk), subInk = inkColor(subtitle, ink)
+  const texts: TextSet = useMemo(() => ({ title, subtitle, ink, subInk }), [title, subtitle, ink, subInk])
+  const moveText = (which: Which, t: Title) => (which === 'title' ? setTitle(t) : setSubtitle(t))
 
   const shoot = useRef<Shoot | null>(null), [saving, setSaving] = useState<string | null>(null)
   const download = async (scale: number, formats: readonly Format[]) => {
@@ -435,8 +487,8 @@ function App() {
     try {
       const stamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-')
       for (const f of formats) {
-        const url = URL.createObjectURL(await shoot.current(scale, f, zoom, title, gray, ink))
-        Object.assign(document.createElement('a'), { href: url, download: `${slug(current.name)}${gray ? '-gray' : ''}-${f.id}-${f.out[0] * scale}x${f.out[1] * scale}-${stamp}.png` }).click()
+        const url = URL.createObjectURL(await shoot.current(scale, f, zoom, texts, gray))
+        Object.assign(document.createElement('a'), { href: url, download: `${slug(name)}${gray ? '-gray' : ''}-${f.id}-${f.out[0] * scale}x${f.out[1] * scale}-${stamp}.png` }).click()
         setTimeout(() => URL.revokeObjectURL(url), 10000)
       }
       setSaving(null)
@@ -493,75 +545,50 @@ function App() {
     const r = e.currentTarget.getBoundingClientRect()
     setWipe(Math.min(100, Math.max(0, ((e.clientX - r.left) / r.width) * 100)))
   }
-  const date = (t: number) => new Date(t).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
+  const when = (t: number) => new Date(t).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
 
   return <main className={gray ? 'gray' : ''}>
-    {/* LEFT · the big, early moves: dice, history, title, overall light. */}
+    {/* LEFT · words first, then the big moves, then the details (folded). */}
     <aside className="pane left">
-      <header><p>LIGHT LAB / 01</p><h1>Glass prism <em>in colored light.</em></h1></header>
+      <header><p>LIGHT LAB / 01</p></header>
+      <section className="controls words">
+        <p className="corner-title first">TITLE</p>
+        <TextControls t={title} set={setTitle} kind="title" />
+        <p className="corner-title">SUBTITLE</p>
+        <TextControls t={subtitle} set={setSubtitle} kind="subtitle" />
+      </section>
       <section className="themes">
+        <p className="corner-title">GENERATE</p>
         <button className="roll-all" onClick={rollEverything} title="Roll lights, shape and zoom together, except what is locked">
           🎲 Randomize everything{lockedCount ? <small> · {lockedCount} locked</small> : null}</button>
-        <p className="corner-title row-title">LIGHTS {lockable('lights')}</p><div>
+        <p className="row-title sub-title">Lights {lockable('lights')}</p><div>
           {MOODS.map(([mood, label]) => <button key={mood} onClick={() => roll({ lights: mood })} title="Roll the dice on every light">{label}</button>)}
           <button onClick={() => setRig(base)} title="Undo light edits back to the last roll or loaded project">↺ reset</button>
         </div>
-        <p className="corner-title row-title">SHAPE {lockable('shape')}</p><div>
+        <p className="row-title sub-title">Shape {lockable('shape')}</p><div>
           <button onClick={() => roll({ shape: 'all' })} title="Roll where the bulge sits, how bulgy and how wide; pattern and under-glow follow">🎲 bulge</button>
           <button onClick={() => roll({ shape: 'move' })} title="Move the top of the bulge only; pattern and under-glow follow">🎲 position</button>
           <button onClick={() => setShape(PRISM)} className={shape === PRISM ? 'active' : ''}>↺ default</button>
         </div>
-        <p className="corner-title row-title">ZOOM {lockable('zoom')}</p><div>
+        <p className="row-title sub-title">Zoom {lockable('zoom')}</p><div>
           <button onClick={() => roll({ zoom: true })} title="Roll how close the camera is">🎲 zoom</button>
           <button onClick={() => setZoom(1)} className={zoom === 1 ? 'active' : ''}>↺ 1×</button>
         </div>
         <label className="range"><span>Zoom (− out · + in)<b>{zoom.toFixed(2)}×</b></span><input type="range" min={ZOOM_MIN} max={ZOOM_MAX} step={0.01} value={Math.log2(zoom)} onChange={(e) => setZoom(Math.round(2 ** +e.target.value * 100) / 100)} onDoubleClick={() => setZoom(1)} title="Camera height over the land · double-click for 1×" /></label>
-        {history.length > 0 && <><p className="corner-title">RECENT ROLLS</p>
+        {history.length > 0 && <><p className="sub-title">Recent rolls</p>
           <div className="history">{history.map((h, k) => <button key={k} onClick={() => applyLook(h.look)} title="Go back to this roll">{h.thumb ? <img src={h.thumb} alt="" /> : '·'}</button>)}</div></>}
       </section>
       <section className="controls">
-        <p className="corner-title">TITLE</p>
-        <div className="title-row">
-          <input className="title-text" value={title.text} onChange={(e) => setTitle({ ...title, text: e.target.value })} placeholder="Title" spellCheck={false} />
-          <label className="check"><input type="checkbox" checked={title.show} onChange={(e) => setTitle({ ...title, show: e.target.checked })} />show</label>
-        </div>
-        <div className="inks">
-          {(['auto', 'white', 'gray', 'black'] as const).map((k) => <button key={k} className={title.ink === k ? 'active' : ''} onClick={() => setTitle({ ...title, ink: k })}
-            title={k === 'auto' ? 'White, dark gray or black, whichever reads best over what is under it in every format' : undefined}>{k === 'auto' ? 'auto' : <><i style={{ background: INKS[k] }} />{k}</>}</button>)}
-          <label className={`custom ${title.ink.startsWith('#') ? 'active' : ''}`} title="Custom colour"><input type="color" value={title.ink.startsWith('#') ? title.ink : '#ffffff'} onChange={(e) => setTitle({ ...title, ink: e.target.value as Ink })} /></label>
-        </div>
         <p className="corner-title">FINISH</p>
         <div className="inks">{([[false, 'Colour'], [true, 'Grayscale']] as const).map(([g, label]) => <button key={label} className={gray === g ? 'active' : ''} onClick={() => setGray(g)}
-          title={g ? 'Black and white artwork, on screen and in exports (the title keeps its colour)' : 'Full colour'}>{label}</button>)}</div>
+          title={g ? 'Black and white artwork, on screen and in exports (the titles keep their colour)' : 'Full colour'}>{label}</button>)}</div>
         <label className="range master"><span>All lights<b>{Math.round(master * 100)}%</b></span><input type="range" min={0} max={1.5} step={0.01} value={master} onChange={(e) => setMaster(+e.target.value)} onDoubleClick={() => setMaster(1)} title="Dims or boosts every light at once · double-click for 100%" /></label>
-      </section>
-    </aside>
-
-    {/* CENTRE · the picture, with the detailed tweaks in a drawer underneath. */}
-    <section className="stage">
-    <div className={`main-view compare-${compare}`}>
-      <div className={`visual generated ${wiping ? 'wiping' : ''}`} onPointerDown={drag} onPointerMove={drag}>
-        <div className={iso ? 'frame' : 'frame window'} style={{ '--ar': format.ar } as React.CSSProperties}><Scene rig={lit} shape={shape} format={format} zoom={zoom} iso={iso} isoTitle={isoTitle} onScore={setScore} shoot={shoot} />
-          {!iso && !wiping && <TitleOverlay title={title} win={windowOf(format, zoom)} gray={gray} ink={ink} samples={samples} id={format.id} onMove={setTitle} />}</div>
-        {wiping && <><img className="wipe-ref" src={REFERENCE} alt="" style={{ clipPath: `inset(0 0 0 ${wipe}%)` }} /><div className="wipe-handle" style={{ left: `${wipe}%` }} /></>}
-        <span className="panel-tag">{wiping ? 'DRAG TO WIPE · ' : ''}{format.name.toUpperCase()} · {zoom.toFixed(2)}×{score != null && comparable && !iso && <b> · ΔE {score.toFixed(1)}</b>}</span>
-      </div>
-      {(compare === 'side' || compare === 'stack') && <figure className="visual reference"><img src={REFERENCE} alt="Geometric abstract reference" /><figcaption>REFERENCE IMAGE</figcaption></figure>}
-      <div className="label"><i></i>{current.name.toUpperCase() || 'UNTITLED'}{dirty && <small>UNSAVED CHANGES</small>}</div>
-      <div className="view-bar">
-        <button className="view" onClick={() => setIso(!iso)}>{iso ? 'TOP DOWN' : 'ISOMETRIC'} <span>↗</span></button>
-        <button className={`compare ${compare === 'side' ? 'selected' : ''}`} onClick={() => toggle('side')}>SIDE × SIDE</button>
-        <button className={`compare ${compare === 'stack' ? 'selected' : ''}`} onClick={() => toggle('stack')}>ABOVE / BELOW</button>
-        <button className={`compare ${compare === 'wipe' ? 'selected' : ''}`} onClick={() => toggle('wipe')}>WIPE</button>
-      </div>
-    </div>
-    <div className={`drawer ${drawer ? 'open' : ''}`}>
-      <nav>{DRAWER_TABS.map(([id, label]) => <button key={id} className={drawer === id ? 'active' : ''} onClick={() => setDrawer(drawer === id ? null : id)}>{label}</button>)}
-        <span>TWEAK</span><button className="fold" onClick={() => setDrawer(drawer ? null : 'light')} title={drawer ? 'Fold away' : 'Open'}>{drawer ? '▾' : '▴'}</button></nav>
-      {drawer && <div className="drawer-body controls">
-        {drawer === 'light' && <>{rig.lamps.map((l) => <LampControls key={l.id} lamp={l} set={setLamp} />)}
-          <CrossControls cross={rig.cross ?? NO_CROSS} set={(cross) => setRig({ ...rig, cross })} /></>}
-        {drawer === 'shape' && <>
+        <p className="corner-title">TWEAK</p>
+        <details className="tweak"><summary>Lights</summary>
+          {rig.lamps.map((l) => <LampControls key={l.id} lamp={l} set={setLamp} />)}
+          <CrossControls cross={rig.cross ?? NO_CROSS} set={(cross) => setRig({ ...rig, cross })} />
+        </details>
+        <details className="tweak"><summary>Shape</summary>
           {shapeRange('Bulge (− = bowl)', 'dome', -3, 4)}
           {shapeRange('Top X (pattern + glow follow)', 'cx', VIEW.cx - VIEW.w * 0.75, VIEW.cx + VIEW.w * 0.75)}
           {shapeRange('Top Y (pattern + glow follow)', 'cy', VIEW.cy - VIEW.h * 0.75, VIEW.cy + VIEW.h * 0.75)}
@@ -569,69 +596,83 @@ function App() {
           {shapeRange('Profile (1 pyramid · 2 round)', 'profile', 0.8, 3)}
           {shapeRange('Fold (per cell)', 'ridge', -0.3, 0.3, 0.005)}
           {shapeRange('Pattern offset X (from top)', 'ox', -6, 6, 0.5)}
-          {shapeRange('Pattern offset Y (from top)', 'oy', -6, 6, 0.5)}</>}
-        {drawer === 'title' && <>
-          {range('Size (of a row)', title.size, (v) => setTitle({ ...title, size: v }), 0.25, 0.85, 0.01, (n) => `${Math.round(n * 100)}%`)}
-          {range('Letter spacing', title.spacing, (v) => setTitle({ ...title, spacing: v }), 0.1, 1.6, 0.01, (n) => n.toFixed(2))}
-          {range('Weight', title.weight, (v) => setTitle({ ...title, weight: v }), 300, 900, 100, (n) => String(n))}
-          {range('Across', title.u, (v) => setTitle({ ...title, u: v }), 0, 1, 0.01, (n) => n.toFixed(2))}
-          {range('Down', title.v, (v) => setTitle({ ...title, v }), 0, 1, 0.01, (n) => n.toFixed(2))}
-          <div><button className="small" onClick={() => setTitle({ ...title, u: TITLE.u, v: TITLE.v })}>↺ centre</button>
-            <p className="follows">Or drag it in the main view. One position for all formats; each snaps it to its own rows and columns.</p></div></>}
-        {drawer === 'room' && <>
+          {shapeRange('Pattern offset Y (from top)', 'oy', -6, 6, 0.5)}
+        </details>
+        <details className="tweak"><summary>Room & exposure</summary>
           <label className="color"><span>Room light</span><input type="color" value={rig.room} onChange={(e) => setRig({ ...rig, room: e.target.value })} /></label>
           {range('Room intensity', rig.roomStrength, (v) => setRig({ ...rig, roomStrength: v }), 0, 3, 0.01, (n) => n.toFixed(2))}
-          {range('Exposure', rig.exposure, (v) => setRig({ ...rig, exposure: v }), 0.2, 3, 0.01, (n) => n.toFixed(2))}</>}
-      </div>}
+          {range('Exposure', rig.exposure, (v) => setRig({ ...rig, exposure: v }), 0.2, 3, 0.01, (n) => n.toFixed(2))}
+        </details>
+      </section>
+    </aside>
+
+    {/* CENTRE · the focused format, the others underneath (click to focus). */}
+    <section className="stage">
+    <div className={`main-view compare-${compare}`}>
+      <div className={`visual generated ${wiping ? 'wiping' : ''}`} onPointerDown={drag} onPointerMove={drag}>
+        <div className={iso ? 'frame' : 'frame window'} style={{ '--ar': format.ar } as React.CSSProperties}><Scene rig={lit} shape={shape} format={format} zoom={zoom} iso={iso} isoTexts={iso ? texts : undefined} onScore={setScore} shoot={shoot} />
+          {!iso && !wiping && <TextOverlay texts={texts} win={windowOf(format, zoom)} gray={gray} samples={samples} id={format.id} onMove={moveText} />}</div>
+        {wiping && <><img className="wipe-ref" src={REFERENCE} alt="" style={{ clipPath: `inset(0 0 0 ${wipe}%)` }} /><div className="wipe-handle" style={{ left: `${wipe}%` }} /></>}
+        <span className="panel-tag">{wiping ? 'DRAG TO WIPE · ' : ''}{format.name.toUpperCase()} · {zoom.toFixed(2)}×{score != null && comparable && !iso && <b> · ΔE {score.toFixed(1)}</b>}</span>
+      </div>
+      {(compare === 'side' || compare === 'stack') && <figure className="visual reference"><img src={REFERENCE} alt="Geometric abstract reference" /><figcaption>REFERENCE IMAGE</figcaption></figure>}
+      <div className="label"><i></i>{name.toUpperCase()}{dirty && <small>UNSAVED CHANGES</small>}</div>
+      <div className="view-bar">
+        <button className="view" onClick={() => setIso(!iso)}>{iso ? 'TOP DOWN' : 'ISOMETRIC'} <span>↗</span></button>
+        <button className={`compare ${compare === 'side' ? 'selected' : ''}`} onClick={() => toggle('side')}>SIDE × SIDE</button>
+        <button className={`compare ${compare === 'stack' ? 'selected' : ''}`} onClick={() => toggle('stack')}>ABOVE / BELOW</button>
+        <button className={`compare ${compare === 'wipe' ? 'selected' : ''}`} onClick={() => toggle('wipe')}>WIPE</button>
+      </div>
+    </div>
+    <div className="thumbs">
+      {FORMATS.filter((f) => f.id !== formatId).map((f) =>
+        <button key={f.id} className="thumb" style={{ '--ar': f.ar } as React.CSSProperties} onClick={() => setFormatId(f.id)} title={`Focus ${f.name}`}>
+          <Scene rig={lit} shape={shape} format={f} zoom={zoom} />
+          <TextOverlay texts={texts} win={windowOf(f, zoom)} gray={gray} samples={samples} id={f.id} />
+          <span>{f.name.toUpperCase()}</span>
+        </button>)}
     </div>
     </section>
 
-    {/* RIGHT · keep it: projects (save / load) and delivery (export PNGs). */}
+    {/* RIGHT · keep it (projects) and deliver it (export). */}
     <aside className="pane right">
       <section className="themes project">
         <p className="corner-title first">PROJECT</p>
-        <input className="project-name" value={current.name} onChange={(e) => setCurrent({ ...current, name: e.target.value })} placeholder="Name, e.g. Song X" spellCheck={false} />
+        <p className="saving-as">{name}<small>{saved && !saved.starter ? (dirty ? 'unsaved changes' : 'saved') : 'not saved yet'}</small></p>
         <div>
           <button className="save-go" onClick={() => saveProject(false)} disabled={!dirty && !!saved && !saved.starter}
-            title={saved && !saved.starter ? 'Save over this project' : 'Save as a new project in this browser'}>{saved && !saved.starter ? (dirty ? '● Save' : '✓ Saved') : 'Save project'}</button>
+            title={saved && !saved.starter ? 'Save over this project' : 'Save as a new project in this browser, named by the title'}>{saved && !saved.starter ? (dirty ? '● Save' : '✓ Saved') : 'Save project'}</button>
           {saved && !saved.starter && <button onClick={() => saveProject(true)} title="Keep the saved one and save this as another project">Save as new</button>}
-          <button onClick={() => exportProject({ name: current.name || 'Untitled', look })} title="Download this project as a file, for backup or another computer">⤓ File</button>
+          <button onClick={() => exportProject({ name, look })} title="Download this project as a file, for backup or another computer">⤓ File</button>
           <button onClick={() => importRef.current?.click()} title="Open a project file">⤒ Open file</button>
           <input ref={importRef} type="file" accept=".json,application/json" hidden onChange={(e) => { onImport(e.target.files?.[0]); e.target.value = '' }} />
         </div>
         {note && <p className="note">{note}</p>}
         <p className="corner-title">YOUR PROJECTS</p>
         <ul className="projects">
-          {projects.length === 0 && <li className="empty">Nothing saved yet. Name it above and save; it stays in this browser.</li>}
-          {projects.map((p) => <li key={p.id} className={p.id === current.id ? 'active' : ''}>
-            <button className="open" onClick={() => openProject(p)}>{p.name}<small>{date(p.savedAt)}</small></button>
+          {projects.length === 0 && <li className="empty">Nothing saved yet. Save and it stays in this browser, under its title.</li>}
+          {projects.map((p) => <li key={p.id} className={p.id === current ? 'active' : ''}>
+            <button className="open" onClick={() => openProject(p)}>{p.name}<small>{when(p.savedAt)}</small></button>
             <button className="del" onClick={() => deleteProject(p)} title="Delete">{confirmDelete === p.id ? 'delete?' : '×'}</button>
           </li>)}
         </ul>
         <p className="corner-title">STARTERS</p>
         <ul className="projects starters">
-          {STARTERS.map((p) => <li key={p.id} className={p.id === current.id ? 'active' : ''}>
+          {STARTERS.map((p) => <li key={p.id} className={p.id === current ? 'active' : ''}>
             <button className="open" onClick={() => openProject(p)} title="Start from this look (keeps your title)">{p.name}</button></li>)}
         </ul>
       </section>
       <section className="themes deliver">
         <p className="corner-title row-title">EXPORT <button className={`all ${allPicked ? 'active' : ''}`} onClick={() => setPicked(allPicked ? null : FORMATS.map((f) => f.id))} title="Tick every format">All</button></p>
-        <div className="thumbs">
-          {FORMATS.map((f) => <div key={f.id} className={`thumb ${f.id === formatId ? 'focused' : ''}`} style={{ '--ar': f.ar } as React.CSSProperties}>
-            <button className="thumb-view" onClick={() => setFormatId(f.id)} title={`Show ${f.name} in the main view`}>
-              <Scene rig={lit} shape={shape} format={f} zoom={zoom} />
-              <TitleOverlay title={title} win={windowOf(f, zoom)} gray={gray} ink={ink} samples={samples} id={f.id} />
-            </button>
-            <label className="tick" title={`Export ${f.name} · ${f.out[0] * scale}×${f.out[1] * scale}`}><input type="checkbox" checked={toSave.includes(f)} onChange={() => pick(f.id)} />{f.name.toUpperCase()}</label>
-          </div>)}
-        </div>
+        <ul className="ticks">{FORMATS.map((f) => <li key={f.id}><label className="tick">
+          <input type="checkbox" checked={toSave.includes(f)} onChange={() => pick(f.id)} />{f.name}<small>{f.out[0] * scale}×{f.out[1] * scale}</small></label></li>)}</ul>
         <div className="save-size">
           {([[1, 'Standard'], [2, '2× print']] as const).map(([k, label]) => <button key={k} className={scale === k ? 'active' : ''} onClick={() => setScale(k)}
             title={k === 1 ? 'Landscape 3500×2500, cover 3000×3000, portrait 2160×3840, header 4500×1500' : 'Twice the pixels in each direction'}>{label}</button>)}
         </div>
         <div>
           <button className="save-go" onClick={() => download(scale, toSave)} disabled={!toSave.length || saving?.endsWith('…')} title="Lossless PNG, sRGB, one file per format">
-            ⤓ Export {toSave.length === 1 ? `${toSave[0].name} PNG · ${toSave[0].out[0] * scale}×${toSave[0].out[1] * scale}` : `${toSave.length} PNGs`}</button>
+            ⤓ Export {toSave.length === 1 ? `${toSave[0].name} PNG` : `${toSave.length} PNGs`}</button>
           {saving && <span className="saving">{saving}</span>}
         </div>
       </section>
